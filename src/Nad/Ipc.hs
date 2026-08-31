@@ -17,16 +17,9 @@ import Control.Monad (forever, void)
 import qualified Data.ByteString.Char8 as BS
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
-import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, removeFile)
-import System.FilePath ((</>))
+import System.Directory (doesFileExist, removeFile)
 
--- | @~\/.nad\/nad.sock@, creating the directory if needed.
-socketPath :: IO FilePath
-socketPath = do
-  home <- getHomeDirectory
-  let dir = home </> ".nad"
-  createDirectoryIfMissing True dir
-  pure (dir </> "nad.sock")
+import Nad.Paths (socketPath)
 
 -- | Accept connections forever on a background thread.
 --

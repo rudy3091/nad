@@ -11,6 +11,7 @@ module Nad.Types.Key
   , nameOfKey
   , parseCombo
   , showCombo
+  , conflicting
   ) where
 
 import Data.Bits ((.&.), (.|.))
@@ -104,6 +105,14 @@ showCombo (KeyCombo mods key) =
   intercalate "-" (map name (sort mods) <> [maybe "?" id (nameOfKey key)])
   where
     name m = maybe "?" fst (find ((== m) . snd) modifierNames)
+
+-- | Which of the system's shortcuts stand in the way of the given bindings.
+--
+-- macOS dispatches its own shortcuts before any event tap, so a binding that
+-- matches one can never fire. The ids come back so the caller can switch those
+-- shortcuts off — and, just as importantly, switch them back on afterwards.
+conflicting :: [KeyCombo] -> [(Int, KeyCombo)] -> [Int]
+conflicting wanted system = [hotkeyId | (hotkeyId, combo) <- system, combo `elem` wanted]
 
 splitOn :: Char -> String -> [String]
 splitOn sep s = case break (== sep) s of

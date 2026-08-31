@@ -107,12 +107,13 @@ int nad_ax_window_pid(nad_window w) {
   return (int)pid;
 }
 
-char *nad_ax_window_app(nad_window w) {
-  int pid = nad_ax_window_pid(w);
-  if (pid < 0) return strdup("");
+char *nad_app_name(int pid) {
+  if (pid <= 0) return strdup("");
   NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
   return copy_utf8(app.localizedName);
 }
+
+char *nad_ax_window_app(nad_window w) { return nad_app_name(nad_ax_window_pid(w)); }
 
 int nad_ax_window_frame(nad_window w, double *x, double *y, double *width, double *height) {
   CFTypeRef posValue = copy_attr((AXUIElementRef)w, kAXPositionAttribute);

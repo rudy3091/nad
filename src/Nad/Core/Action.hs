@@ -28,6 +28,10 @@ data Action
     ResizeMaster Double
   | -- | Change how many windows share the master area.
     IncMaster Int
+  | -- | Resize the focused window itself, by a fraction of its screen. Only
+    -- 'Nad.Core.Layout.Stacking' can honour this; the tiled layouts decide a
+    -- window's size from its neighbours.
+    ResizeWindow Double Double
   | CycleLayout
   | -- | Show a workspace on the focused screen.
     View Int
@@ -52,6 +56,10 @@ actionNames =
   , ("expand-master", ResizeMaster 0.05)
   , ("inc-master", IncMaster 1)
   , ("dec-master", IncMaster (-1))
+  , ("window-narrower", ResizeWindow (-0.05) 0)
+  , ("window-wider", ResizeWindow 0.05 0)
+  , ("window-shorter", ResizeWindow 0 (-0.05))
+  , ("window-taller", ResizeWindow 0 0.05)
   , ("cycle-layout", CycleLayout)
   , ("screen-next", MoveToScreen Next)
   , ("screen-prev", MoveToScreen Prev)

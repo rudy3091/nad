@@ -25,8 +25,25 @@ void nad_ax_release(nad_window w);
 // so this is the only correct way to compare them.
 int nad_ax_same_window(nad_window a, nad_window b);
 
+// Localized application name for a pid, or "" if there is no such app.
+char *nad_app_name(int pid);
+
 // free() for anything the shim malloc'd.
 void nad_free(void *p);
+
+// --- Secure input ----------------------------------------------------------
+//
+// While an application has secure keyboard entry on, the WindowServer delivers
+// no key events to event taps at all — that is the point of it. nad's hotkeys
+// simply stop working for as long as that application is focused, and there is
+// no way around it from user space. All nad can do is say so.
+
+// The reliable answer: is secure input on anywhere in this session?
+int nad_secure_input_enabled(void);
+
+// Best effort: which pid turned it on, or 0 when that cannot be determined.
+// Only ever used to name the culprit, never to decide whether it is on.
+int nad_secure_input_pid(void);
 
 char *nad_ax_window_title(nad_window w);
 char *nad_ax_window_app(nad_window w);
@@ -63,6 +80,23 @@ int nad_hotkey_start(nad_key_handler handler);
 // today, window notifications and the bar later — needs this to be running.
 void nad_run_loop(void);
 void nad_stop_run_loop(void);
+
+// --- System ("symbolic") hotkeys -------------------------------------------
+//
+// macOS dispatches its own shortcuts in the WindowServer, ahead of any event
+// tap, so a binding that collides with one can never fire. These calls let nad
+// switch a colliding shortcut off while it runs. They are private SkyLight API:
+// the only public alternative is asking the user to click through System
+// Settings.
+//
+// Ids are opaque and sparse; walk 0..NAD_SYMBOLIC_HOTKEY_MAX to enumerate.
+#define NAD_SYMBOLIC_HOTKEY_MAX 256
+
+// Fills the key code and NAD_MOD_* modifiers for a hotkey. Returns 0 on
+// success, -1 if that id is not a hotkey.
+int nad_symbolic_hotkey_get(int id, uint16_t *keycode, uint32_t *modifiers);
+int nad_symbolic_hotkey_enabled(int id);
+void nad_symbolic_hotkey_set_enabled(int id, int enabled);
 
 // --- Status bar -----------------------------------------------------------
 // Bar geometry is Cocoa coordinates. Bars are identified by the index returned

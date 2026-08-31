@@ -106,7 +106,15 @@ defaultKeys =
   , ("cmd-alt-l", ResizeMaster 0.05)
   , ("cmd-alt-comma", IncMaster 1)
   , ("cmd-alt-period", IncMaster (-1))
+  -- macOS claims this one for Finder search. nad switches that system shortcut
+  -- off while it runs and puts it back on exit, so the xmonad key still works.
   , ("cmd-alt-space", CycleLayout)
+  -- Resizing the focused window itself, for the Stacking layout. Vim
+  -- directions, one modifier deeper than the master-area keys they echo.
+  , ("cmd-alt-ctrl-h", ResizeWindow (-0.05) 0)
+  , ("cmd-alt-ctrl-l", ResizeWindow 0.05 0)
+  , ("cmd-alt-ctrl-k", ResizeWindow 0 (-0.05))
+  , ("cmd-alt-ctrl-j", ResizeWindow 0 0.05)
   , ("cmd-alt-r", Retile)
   , ("cmd-alt-shift-left", MoveToScreen Prev)
   , ("cmd-alt-shift-right", MoveToScreen Next)

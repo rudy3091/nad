@@ -22,6 +22,7 @@ library
                       Nad.Bar.Segment
                       Nad.Config.Recompile
                       Nad.Ipc
+                      Nad.Paths
                       Nad.Runtime
                       Nad.Types.Config
                       Nad.Types.Geometry
@@ -52,8 +53,12 @@ library
                       cbits/nad_screen.m
                       cbits/nad_hotkey.m
                       cbits/nad_bar.m
+                      cbits/nad_secure.m
     cc-options:       -fobjc-arc
-    frameworks:       Cocoa ApplicationServices CoreGraphics
+    -- SkyLight is private: it is the only way to switch off a system shortcut
+    -- that would otherwise shadow a key binding. See cbits/nad_hotkey.m.
+    frameworks:       Carbon Cocoa ApplicationServices CoreGraphics IOKit SkyLight
+    extra-framework-dirs: /System/Library/PrivateFrameworks
 
 executable nad
     import:           warnings

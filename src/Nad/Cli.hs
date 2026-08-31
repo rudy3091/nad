@@ -10,14 +10,16 @@ module Nad.Cli
 import Control.Monad (forM_, unless)
 import System.Directory (doesFileExist)
 import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hFlush, hPutStrLn, stderr, stdout)
 
 import Nad.Core.Layout (arrange)
-import Nad.Config.Recompile (compiledPath, configPath, launchUserConfig, recompile)
-import Nad.Ipc (sendCommand, socketPath)
+import Nad.Config.Recompile (launchUserConfig, recompile)
+import Nad.Paths (compiledPath, configPath, socketPath)
+import Nad.Ipc (sendCommand)
 import Nad.Runtime (runDaemon)
 import Nad.Types.Config (Config (..), bindings, reserveBar, shouldFloat)
-import Nad.Types.Key (showCombo)
+import Nad.Platform.Hotkey (runEventLoop, secureInputHolder, startHotkeys)
+import Nad.Types.Key (KeyCode (..), KeyCombo (..), Modifier (..), showCombo)
 import Nad.Core.Action (showAction)
 import Nad.Platform.Screen (listScreens)
 import Nad.Platform.Window (isTrusted, listWindows, requestTrust, setWindowFrame)
@@ -31,6 +33,7 @@ data Command
   | QueryState
   | Message [String]
   | Recompile
+  | WatchKeys
   | Tile
   | Doctor
   | Help
@@ -47,6 +50,7 @@ parseCommand args = case args of
   ["tile"] -> Tile
   ["doctor"] -> Doctor
   ["--recompile"] -> Recompile
+  ["watch-keys"] -> WatchKeys
   [] -> Daemon
   ["--help"] -> Help
   ["-h"] -> Help
@@ -57,6 +61,7 @@ runCommand cfg cmd = case cmd of
   -- A user config replaces this process entirely; if there is none, carry on.
   Daemon -> launchUserConfig >> runDaemon cfg
   Recompile -> recompileOnly
+  WatchKeys -> watchKeys
   QueryKeys -> mapM_ putStrLn (describeKeys cfg)
   QueryState -> ask ["state"]
   Message args -> ask args
@@ -85,7 +90,33 @@ usage =
     , "  nad tile             apply the default layout once, then exit"
     , "  nad --recompile      rebuild ~/.nad/nad.hs"
     , "  nad doctor           check permissions and setup"
+    , "  nad watch-keys       print every key press nad's tap can see"
     ]
+
+-- | Report what the event tap actually observes.
+--
+-- This answers the question a dead binding raises: did the key never reach nad,
+-- or did nad see it and not have it bound? cmd-alt combinations are swallowed
+-- while this runs, so it also shows whether a system shortcut can be taken over
+-- at all — if the system action still fires, the tap never had a chance.
+watchKeys :: IO ()
+watchKeys = do
+  started <- startHotkeys $ \combo -> do
+    let claimed = Cmd `elem` comboMods combo && Alt `elem` comboMods combo
+        KeyCode code = comboKey combo
+    putStrLn
+      ( pad 24 (showCombo combo)
+          <> pad 12 ("keycode " <> show code)
+          <> (if claimed then "swallowed" else "passed through")
+      )
+    hFlush stdout
+    pure claimed
+  unless started $ do
+    hPutStrLn stderr inputMonitoringHelp
+    exitFailure
+  reportSecureInput
+  putStrLn "watching keys. cmd-alt combinations are swallowed; ctrl-c to stop."
+  runEventLoop
 
 recompileOnly :: IO ()
 recompileOnly = do
@@ -143,6 +174,9 @@ doctor = do
   path <- socketPath
   running <- sendCommand path ["state"]
   putStrLn (check (either (const False) (const True) running) "Daemon reachable on the control socket")
+  holder <- secureInputHolder
+  putStrLn (check (holder == Nothing) "No application is holding secure keyboard entry")
+  forM_ holder (putStrLn . ("\n" <>) . secureInputHelp)
   unless trusted (putStrLn ("\n" <> accessibilityHelp))
   where
     check ok label = (if ok then "  ok   " else "  FAIL ") <> label
@@ -155,7 +189,36 @@ describeKeys cfg =
     <> ["unparseable: " <> name | name <- bad]
   where
     (keymap, bad) = bindings cfg
-    pad n s = s <> replicate (max 1 (n - length s)) ' '
+
+pad :: Int -> String -> String
+pad n s = s <> replicate (max 1 (n - length s)) ' '
+
+inputMonitoringHelp :: String
+inputMonitoringHelp =
+  unlines
+    [ "nad could not create the event tap, so it cannot see any keys."
+    , "Grant Input Monitoring in System Settings › Privacy & Security,"
+    , "then run nad again."
+    ]
+
+-- | Warn about secure input on the diagnostic paths. Silent when nothing holds
+-- it, which is the normal case.
+reportSecureInput :: IO ()
+reportSecureInput = secureInputHolder >>= mapM_ (hPutStrLn stderr . secureInputHelp)
+
+secureInputHelp :: String -> String
+secureInputHelp name =
+  unlines
+    [ name <> " has secure keyboard entry switched on."
+    , "macOS sends no key events to event taps while that is true, so none of"
+    , "nad's bindings will fire while it is focused. That is a system guarantee,"
+    , "not something nad can work around."
+    , ""
+    , "Turn it off in that application. In kitty it is opt+cmd+s"
+    , "(toggle_macos_secure_keyboard_entry) and the setting is remembered:"
+    , "  defaults write net.kovidgoyal.kitty SecureKeyboardEntry -bool false"
+    , "In Terminal.app it is the Edit › Secure Keyboard Entry menu item."
+    ]
 
 accessibilityHelp :: String
 accessibilityHelp =

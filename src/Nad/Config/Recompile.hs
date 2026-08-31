@@ -6,32 +6,22 @@
 -- user launched, this is transparent: the process keeps its pid and its
 -- permissions.
 module Nad.Config.Recompile
-  ( configPath
-  , compiledPath
-  , recompile
+  ( recompile
   , launchUserConfig
   ) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad (unless)
-import System.Directory
-  ( doesFileExist
-  , getHomeDirectory
-  , getModificationTime
-  )
+import System.Directory (doesFileExist, getHomeDirectory, getModificationTime)
 import System.Environment (getExecutablePath, getArgs)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.Info (arch)
+
 import System.IO (hPutStrLn, stderr)
 import System.Posix.Process (executeFile)
 import System.Process (readProcessWithExitCode)
 
-configPath :: IO FilePath
-configPath = (\home -> home </> ".nad" </> "nad.hs") <$> getHomeDirectory
-
-compiledPath :: IO FilePath
-compiledPath = (\home -> home </> ".nad" </> ("nad-" <> arch <> "-darwin")) <$> getHomeDirectory
+import Nad.Paths (compiledPath, configPath)
 
 -- | Build @nad.hs@ if it exists and is newer than its binary.
 --

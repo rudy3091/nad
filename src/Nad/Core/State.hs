@@ -6,6 +6,9 @@ module Nad.Core.State
   , initialState
   , currentStack
   , currentLayout
+  , placeOf
+  , resize
+  , place
   , syncWindows
   , focusedWindow
   , workspaceOf
@@ -13,9 +16,10 @@ module Nad.Core.State
   ) where
 
 import Data.List (find)
+import Data.Maybe (fromMaybe)
 
 import Nad.Core.Action (Action (..), Direction (..))
-import Nad.Core.Layout (Layout (..), LayoutSpec (..), nextLayout)
+import Nad.Core.Layout (Layout (..), LayoutSpec (..), Placement (..), nextLayout, noPlacement)
 import Nad.Core.Stack (Stack (..))
 import qualified Nad.Core.Stack as Stack
 
@@ -30,6 +34,10 @@ data WMState w = WMState
   , stCurrent :: !Int
   -- | Head is the layout in use; 'CycleLayout' rotates the list.
   , stLayouts :: ![LayoutSpec]
+  -- | Per-window placement overrides, as fractions of the screen. Only windows
+  -- the user has actually resized or dragged appear here, and only
+  -- 'Nad.Core.Layout.Stacking' reads them.
+  , stPlaces :: ![(w, Placement)]
   , -- | Cleared by 'Quit', which is how the runtime knows to stop.
     stRunning :: !Bool
   }
@@ -41,6 +49,7 @@ initialState count layouts =
     { stWorkspaces = [Workspace i Stack.empty | i <- [1 .. max 1 count]]
     , stCurrent = 1
     , stLayouts = layouts
+    , stPlaces = []
     , stRunning = True
     }
 
@@ -55,6 +64,35 @@ currentLayout st = case stLayouts st of
   (l : _) -> l
   [] -> LayoutSpec Tall 0.55 1 8
 
+-- | What the user decided about a window, as far as they decided anything.
+placeOf :: Eq w => WMState w -> w -> Placement
+placeOf st w = fromMaybe noPlacement (lookup w (stPlaces st))
+
+-- | Grow or shrink one window by a fraction of the screen, leaving its origin
+-- to whoever was deciding it before.
+--
+-- Clamped so a held-down key can neither grow a window past its screen nor
+-- shrink it to something the user can no longer find.
+resize :: Eq w => w -> (Double, Double) -> WMState w -> WMState w
+resize w (dw, dh) st = place w (old {placeSize = Just resized}) st
+  where
+    old = placeOf st w
+    (fw, fh) = fromMaybe (1, 1) (placeSize old)
+    resized = (clamp 0.2 1 (fw + dw), clamp 0.2 1 (fh + dh))
+
+-- | Record where the user put a window. Clamped to keep it on the screen and
+-- big enough to grab, however far the mouse went.
+place :: Eq w => w -> Placement -> WMState w -> WMState w
+place w p st =
+  st {stPlaces = (w, clamped) : filter ((/= w) . fst) (stPlaces st)}
+  where
+    clamped =
+      Placement
+        { placeOrigin = fmap (both (clamp 0 0.9)) (placeOrigin p)
+        , placeSize = fmap (both (clamp 0.2 1)) (placeSize p)
+        }
+    both f (a, b) = (f a, f b)
+
 focusedWindow :: WMState w -> Maybe w
 focusedWindow = stackFocus . currentStack
 
@@ -67,7 +105,13 @@ workspaceOf w st = wsId <$> find (elem w . stackItems . wsStack) (stWorkspaces s
 -- are dropped from wherever they were. A window on another workspace stays
 -- there — that is the whole point of workspaces.
 syncWindows :: Eq w => [w] -> WMState w -> WMState w
-syncWindows live st = st {stWorkspaces = map syncOne (stWorkspaces st)}
+syncWindows live st =
+  st
+    { stWorkspaces = map syncOne (stWorkspaces st)
+    , -- A placement outlives nothing: drop it with its window, or a long
+      -- session accumulates entries for windows that closed hours ago.
+      stPlaces = [entry | entry <- stPlaces st, fst entry `elem` live]
+    }
   where
     known = concatMap (stackItems . wsStack) (stWorkspaces st)
     unseen = filter (`notElem` known) live
@@ -91,6 +135,7 @@ apply action st = case action of
     l {specMasterRatio = clamp 0.1 0.9 (specMasterRatio l + delta)}
   IncMaster delta -> onLayout $ \l ->
     l {specMasterCount = max 1 (specMasterCount l + delta)}
+  ResizeWindow dw dh -> maybe st (\w -> resize w (dw, dh) st) (focusedWindow st)
   View n
     | validWorkspace n -> st {stCurrent = n}
     | otherwise -> st

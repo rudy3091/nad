@@ -29,6 +29,15 @@ foreign import ccall unsafe "&nad_ax_release"
 foreign import ccall unsafe "nad_free"
   c_free :: Ptr a -> IO ()
 
+foreign import ccall safe "nad_app_name"
+  c_app_name :: CInt -> IO CString
+
+foreign import ccall safe "nad_secure_input_enabled"
+  c_secure_input_enabled :: IO CInt
+
+foreign import ccall safe "nad_secure_input_pid"
+  c_secure_input_pid :: IO CInt
+
 foreign import ccall safe "nad_ax_window_title"
   c_ax_window_title :: Ptr () -> IO CString
 
@@ -74,6 +83,19 @@ foreign import ccall safe "nad_run_loop"
 
 foreign import ccall unsafe "nad_stop_run_loop"
   c_stop_run_loop :: IO ()
+
+-- | Matches NAD_SYMBOLIC_HOTKEY_MAX in @cbits/nad.h@.
+symbolicHotkeyMax :: Int
+symbolicHotkeyMax = 256
+
+foreign import ccall unsafe "nad_symbolic_hotkey_get"
+  c_symbolic_hotkey_get :: CInt -> Ptr Word16 -> Ptr Word32 -> IO CInt
+
+foreign import ccall unsafe "nad_symbolic_hotkey_enabled"
+  c_symbolic_hotkey_enabled :: CInt -> IO CInt
+
+foreign import ccall unsafe "nad_symbolic_hotkey_set_enabled"
+  c_symbolic_hotkey_set_enabled :: CInt -> CInt -> IO ()
 
 -- | Bar calls hop to the main thread inside the shim, so they are @safe@: they
 -- block until AppKit has done the work.

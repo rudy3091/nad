@@ -14,22 +14,31 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM
 import Control.Monad (forM_, forever, unless, void, when)
 import Data.IORef
-import Data.List (find)
+import Data.List (find, foldl')
 import Data.Maybe (listToMaybe)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
+import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (getZonedTime)
 
 import Nad.Bar.Segment (BarState (..))
 import Nad.Core.Action (Action (..), Direction (..), parseAction)
-import Nad.Core.Layout (arrange, layoutName)
+import Nad.Core.Layout (arrangeWith, draggedPlacements, layoutName)
 import Nad.Core.Stack (Stack (..))
 import Nad.Core.State
 import Nad.Ipc (serve, socketPath)
 import Nad.Platform.Bar (Bar (..), createBars, initApp, updateBar)
-import Nad.Platform.Hotkey (runEventLoop, startHotkeys, stopEventLoop)
+import Nad.Platform.Hotkey
+  ( claimSystemHotkeys
+  , releaseStaleHotkeys
+  , releaseSystemHotkeys
+  , runEventLoop
+  , secureInputHolder
+  , startHotkeys
+  , stopEventLoop
+  )
 import Nad.Platform.Screen (listScreens, mainScreenHeight)
 import Nad.Platform.Window (focusWindow, listWindows, requestTrust, setWindowFrame)
 import Nad.Types.Config (BarConfig (..), Config (..), bindings, reserveBar, shouldFloat)
@@ -64,6 +73,21 @@ runDaemon cfg = do
   queue <- newTQueueIO
   state <- newIORef (initialState (cfgWorkspaces cfg) (cfgLayouts cfg))
 
+  -- A previous run that was killed outright may have left system shortcuts
+  -- switched off. Put them back before deciding what to claim this time.
+  releaseStaleHotkeys
+  claimed <- claimSystemHotkeys (map fst keymap)
+  unless (null claimed) $
+    hPutStrLn stderr
+      ( "nad: took over "
+          <> show (length claimed)
+          <> " system shortcut(s) that would have shadowed a binding"
+      )
+
+  -- Every exit path has to give them back, including ctrl-c and `kill`.
+  forM_ [sigINT, sigTERM] $ \signal ->
+    installHandler signal (Catch (releaseSystemHotkeys claimed >> stopEventLoop)) Nothing
+
   tapped <- startHotkeys $ \combo ->
     case lookup combo keymap of
       Nothing -> pure False
@@ -73,6 +97,17 @@ runDaemon cfg = do
   unless tapped $ do
     hPutStrLn stderr "nad: could not create the event tap. Grant Input Monitoring, then retry."
     exitFailure
+
+  -- Worth saying once at start: with secure input on, every binding is dead
+  -- while that application is focused, and nothing in nad's logs would show it.
+  holder <- secureInputHolder
+  forM_ holder $ \name ->
+    hPutStrLn stderr
+      ( "nad: warning — "
+          <> name
+          <> " has secure keyboard entry on; bindings will not fire while it is"
+          <> " focused. See `nad doctor`."
+      )
 
   void $ forkIO $ forever $ do
     threadDelay pollInterval
@@ -94,6 +129,7 @@ runDaemon cfg = do
 
   atomically (writeTQueue queue Refresh)
   runEventLoop
+  releaseSystemHotkeys claimed
 
 -- | Answer a control-socket request. Actions are queued so the worker stays the
 -- only thing that touches state; queries read the last state it published.
@@ -131,7 +167,7 @@ worker cfg bars queue state = loop
       st0 <- readIORef state
       let st1 = syncWindows (map winRef tileable0) st0
           st2 = case event of
-            Refresh -> st1
+            Refresh -> adoptDrags screens tileable0 st1
             Perform action -> apply action st1
       writeIORef state st2
 
@@ -177,22 +213,51 @@ barState clock screen windows st =
 -- sit on; windows of every other workspace are parked off screen.
 reconcile :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> IO ()
 reconcile screens windows st = do
-  forM_ screens $ \screen -> do
-    let here = [w | w <- visible, assignedTo w == Just (screenIndex screen)]
-    forM_ (arrange (currentLayout st) (screenUsable screen) here) $ \(w, rect) ->
+  forM_ (onScreens screens windows st) $ \(screen, here) -> do
+    let sizing w = placeOf st (winRef w)
+    forM_ (arrangeWith (currentLayout st) (screenUsable screen) sizing here) $ \(w, rect) ->
       void (setWindowFrame (winRef w) rect)
   forM_ hidden $ \w -> void (setWindowFrame (winRef w) (parkingSpot screens (winFrame w)))
+  where
+    hidden = [w | w <- windows, winRef w `notElem` stackItems (currentStack st)]
+
+-- | The current workspace's windows, in stack order, grouped by the screen they
+-- sit on. This is the split both the layout pass and drag adoption work from.
+onScreens
+  :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> [(ScreenInfo, [WindowInfo])]
+onScreens screens windows st =
+  [ (screen, [w | w <- visible, assignedTo w == Just (screenIndex screen)])
+  | screen <- screens
+  ]
   where
     order = stackItems (currentStack st)
     -- Follow the stack's order, not the order macOS happened to report.
     visible = [w | ref <- order, Just w <- [find ((== ref) . winRef) windows]]
-    hidden = [w | w <- windows, winRef w `notElem` order]
 
     -- A window returning from another workspace is still parked off screen, so
     -- it belongs to no display. Give it the first one rather than dropping it.
     assignedTo w = case screenFor screens (winFrame w) of
       Just s -> Just (screenIndex s)
       Nothing -> screenIndex <$> listToMaybe screens
+
+-- | Let the mouse resize a window in the Stacking layout: instead of putting it
+-- back where the layout wanted it on the next poll, keep the frame the user
+-- dragged it to. Its origin comes along, or grabbing the top-right corner would
+-- pull the window up and to the left while the pointer is still on it.
+adoptDrags :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> WMState WindowRef
+adoptDrags screens windows st = foldl' adopt st drags
+  where
+    adopt s (w, placement) = place (winRef w) placement s
+
+    spec = currentLayout st
+    sizing w = placeOf st (winRef w)
+
+    drags =
+      concat
+        [ draggedPlacements spec area (Just . winFrame) (arrangeWith spec area sizing here)
+        | (screen, here) <- onScreens screens windows st
+        , let area = screenUsable screen
+        ]
 
 -- | Where hidden windows wait: just past the right edge of every display, at
 -- the height they already had so the window keeps its shape.
