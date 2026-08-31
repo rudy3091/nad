@@ -1,0 +1,72 @@
+cabal-version:      3.0
+name:               nad
+version:            0.1.0.0
+synopsis:           An xmonad-like tiling window manager for macOS
+description:        Keyboard-driven tiling window manager built on the macOS
+                    Accessibility API. Configured in Haskell, like xmonad.
+license:            MIT
+license-file:       LICENSE
+author:             rudy3091
+maintainer:         grayblack313@gmail.com
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    hs-source-dirs:   src
+    exposed-modules:  Nad
+                      Nad.Cli
+                      Nad.Bar.Segment
+                      Nad.Config.Recompile
+                      Nad.Ipc
+                      Nad.Runtime
+                      Nad.Types.Config
+                      Nad.Types.Geometry
+                      Nad.Types.Key
+                      Nad.Types.Window
+                      Nad.Core.Action
+                      Nad.Core.Layout
+                      Nad.Core.Stack
+                      Nad.Core.State
+                      Nad.Platform.Bar
+                      Nad.Platform.FFI
+                      Nad.Platform.Hotkey
+                      Nad.Platform.Marshal
+                      Nad.Platform.Screen
+                      Nad.Platform.Window
+    build-depends:    base ^>=4.20.2.0
+                    , bytestring
+                    , directory
+                    , filepath
+                    , network
+                    , stm
+                    , time
+                    , process
+                    , unix
+    default-language: Haskell2010
+    include-dirs:     cbits
+    c-sources:        cbits/nad_ax.m
+                      cbits/nad_screen.m
+                      cbits/nad_hotkey.m
+                      cbits/nad_bar.m
+    cc-options:       -fobjc-arc
+    frameworks:       Cocoa ApplicationServices CoreGraphics
+
+executable nad
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    build-depends:    base ^>=4.20.2.0, nad
+    ghc-options:      -threaded
+    default-language: Haskell2010
+
+test-suite nad-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Spec.hs
+    hs-source-dirs:   test
+    build-depends:    base ^>=4.20.2.0, nad
+    default-language: Haskell2010
