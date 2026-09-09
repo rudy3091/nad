@@ -14,7 +14,7 @@
   neighbouring display's workspace rather than repositioning it by hand.
 * Each display's status bar marks its own workspace. `BarState` gains
   `bsOtherScreens`, the workspaces showing on the other displays.
-* New `cfgBorder`: an outline around the focused window, 3px soft white by
+* New `cfgBorder`: an outline around the focused window, 5px soft white by
   default.
 * `cfgPin` now decides the display a window *opens* on rather than holding it
   there for good.

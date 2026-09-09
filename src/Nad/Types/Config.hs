@@ -102,7 +102,7 @@ defaultBorder :: BorderConfig
 defaultBorder =
   BorderConfig
     { borderEnabled = True
-    , borderWidth = 3
+    , borderWidth = 5
     , borderColor = "#cccccc"
     }
 

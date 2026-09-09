@@ -232,7 +232,7 @@ display" as a third state, distinct from both current and hidden.
 ```haskell
 data BorderConfig = BorderConfig
   { borderEnabled :: Bool    -- True
-  , borderWidth   :: Double  -- 3, points, drawn just outside the window's edge
+  , borderWidth   :: Double  -- 5, points, drawn just outside the window's edge
   , borderColor   :: String  -- "#cccccc", a soft white
   }
 ```
