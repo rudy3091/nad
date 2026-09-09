@@ -10,6 +10,9 @@ author:             rudy3091
 maintainer:         grayblack313@gmail.com
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
+-- c-sources does not pull in the header they all include, so without this
+-- `cabal install --lib nad` builds from a source distribution missing it.
+extra-source-files: cbits/nad.h
 
 common warnings
     ghc-options: -Wall

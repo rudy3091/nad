@@ -45,6 +45,11 @@ recompile force = do
             readProcessWithExitCode
               "ghc"
               [ "-v0"
+              , -- Must match the shipped executable's. 'Nad.Runtime.runDaemon'
+                -- parks the main thread in CFRunLoopRun, a safe foreign call
+                -- that never returns; without the threaded RTS that freezes the
+                -- whole runtime and the worker never handles an event again.
+                "-threaded"
               , "-o", binary
               , "-outputdir", home </> ".nad" </> "build"
               , "-package", "nad"
