@@ -61,7 +61,7 @@ NAD_SIGN_IDENTITY=nad-dev scripts/bundle.sh
 
 ```sh
 nad                     # run it
-nad restart             # stop the running one and take its place
+nad restart             # rebuild the bars after plugging a display in or out
 nad query keys          # the active bindings
 nad query windows       # what nad can tile
 nad query screens       # displays and their usable areas
@@ -107,14 +107,38 @@ parked off screen.
   workspace the neighbouring display is showing, and leave the keyboard behind.
 - Plugging a display in gives it the lowest workspace nothing else is showing.
   Unplugging one leaves its windows on their workspace, still reachable with
-  `cmd-alt-N`. The status bar is the exception: it needs a restart to appear on
-  a display added mid-session.
+  `cmd-alt-N`.
 
 `nad query state` prints the bindings, with `*` on the focused display:
 
 ```
 screens    0=1* 1=3
 ```
+
+### After the displays change
+
+Tiling follows a display being plugged in or out within a second, on the next
+poll. The status bar does not: bars are created once at start-up, one per
+display, and there is no display-reconfiguration callback yet to hang a rebuild
+off. So after the monitor layout changes a bar can be left on a display that is
+gone, missing from one that arrived, or sitting at coordinates that no longer
+mean anything.
+
+`nad restart` is the fix:
+
+```sh
+nad restart
+```
+
+It asks the running nad to quit through the control socket — a clean exit, so
+the system shortcuts it took over are handed back — waits for it to let go of
+the socket, then starts a new one. Bars are built for the displays that are
+actually attached this time.
+
+The new daemon runs in its own session, so `nad restart` gives the prompt back
+straight away and closing the terminal does not take the window manager with
+it. No `&` needed, and the same command works bound to a key. Nothing listening
+is not an error, so `nad restart` doubles as a plain start.
 
 nad has no way to read which window macOS considers focused, so clicking on the
 other display does not move the keyboard there — `cmd-alt-right` does. The
@@ -218,19 +242,18 @@ main =
 process keeps its permissions. `nad --recompile` rebuilds it; a config that
 fails to compile is reported and the previous binary keeps running.
 
-`nad restart` picks up an edited config: it asks the running nad to quit through
-the control socket — so the system shortcuts it took over are handed back —
-waits for it to go, then starts in its place.
+An edited config reaches a running nad the same way a display change does, with
+`nad restart`. After reinstalling the *library* rather than editing `nad.hs`,
+force the rebuild first:
 
 ```sh
-nad restart               # after editing ~/.nad/nad.hs
-nad --recompile && nad restart   # after rebuilding the library itself
+nad restart                      # after editing ~/.nad/nad.hs
+nad --recompile && nad restart   # after reinstalling the library
 ```
 
-The second form matters because `nad` only rebuilds the config when `nad.hs` is
-newer than its binary. Reinstalling the library does not touch `nad.hs`, so
-without `--recompile` a restart re-runs the same stale binary and nothing
-appears to change.
+`nad` only rebuilds the config when `nad.hs` is newer than its binary, and
+reinstalling the library does not touch `nad.hs` — so without `--recompile` the
+restart re-runs the same stale binary and nothing appears to change.
 
 The library has to be visible to GHC for this. Once:
 

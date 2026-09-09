@@ -8,10 +8,13 @@ module Nad.Cli
   ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, unless, void)
+import Data.Either (isLeft, isRight)
 import System.Directory (doesFileExist)
+import System.Environment (getExecutablePath)
 import System.Exit (exitFailure)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
+import System.Process (CreateProcess (..), createProcess, proc)
 
 import Nad.Core.Layout (arrange)
 import Nad.Config.Recompile (launchUserConfig, recompile)
@@ -63,7 +66,7 @@ runCommand :: Config -> Command -> IO ()
 runCommand cfg cmd = case cmd of
   -- A user config replaces this process entirely; if there is none, carry on.
   Daemon -> launchUserConfig >> runDaemon cfg
-  Restart -> stopRunning >> runCommand cfg Daemon
+  Restart -> restartDaemon
   Recompile -> recompileOnly
   WatchKeys -> watchKeys
   QueryKeys -> mapM_ putStrLn (describeKeys cfg)
@@ -86,7 +89,7 @@ usage =
     , ""
     , "usage:"
     , "  nad                  run the window manager"
-    , "  nad restart          stop a running nad and take its place"
+    , "  nad restart          restart the daemon, e.g. after the displays change"
     , "  nad msg <action>     tell a running nad to do something"
     , "  nad query keys       list the active key bindings"
     , "  nad query state      ask a running nad what it is showing"
@@ -123,35 +126,55 @@ watchKeys = do
   putStrLn "watching keys. cmd-alt combinations are swallowed; ctrl-c to stop."
   runEventLoop
 
--- | Ask a running daemon to quit, and wait until it has.
+-- | Stop the running daemon and start a fresh one in the background.
+--
+-- This exists for the status bar. Bars are built once per display at start-up,
+-- so plugging a monitor in or out mid-session leaves them on displays that are
+-- gone or missing from ones that arrived, and only a new process puts that
+-- right. See 'Nad.Platform.Bar.createBars'.
+--
+-- The new daemon is spawned rather than exec'd into, so the command returns and
+-- the shell gets its prompt back. Nothing listening is not an error: a restart
+-- is then just a start.
+restartDaemon :: IO ()
+restartDaemon = do
+  path <- socketPath
+  stopRunning path
+  self <- getExecutablePath
+  -- Its own session, so closing the terminal it was typed in does not take the
+  -- window manager with it. Streams are inherited, exactly as they are for
+  -- `nad &`, so a start-up warning still reaches the user.
+  void (createProcess (proc self []) {new_session = True})
+  up <- waitFor (isRight <$> sendCommand path ["state"])
+  unless up $
+    hPutStrLn stderr "nad: the new nad has not come up. Run `nad` to see why."
+
+-- | Ask a running daemon to quit, and wait until it really has.
 --
 -- Through the control socket rather than a signal, so the daemon takes its own
--- exit path and hands back the system shortcuts it switched off. Returns
--- straight away when nothing is listening, which makes @nad restart@ work as a
--- plain start too.
---
--- The old process holds the event tap and the socket until it is really gone,
--- so starting the new one before then would leave it without either.
-stopRunning :: IO ()
-stopRunning = do
-  path <- socketPath
+-- exit path and hands back the system shortcuts it switched off. The old
+-- process holds the event tap and the socket until it is gone, so starting the
+-- new one any earlier would leave it without either.
+stopRunning :: FilePath -> IO ()
+stopRunning path = do
   running <- sendCommand path ["quit"]
   case running of
     Left _ -> pure ()
-    Right _ -> waitFor path restartTimeout
-  where
-    -- A daemon does not delete its socket file on the way out, so the only way
-    -- to ask whether it has gone is to try to talk to it.
-    waitFor path n
-      | n <= 0 =
-          hPutStrLn stderr "nad: the running nad has not exited; starting anyway."
-      | otherwise = do
-          threadDelay pollDelay
-          alive <- sendCommand path ["state"]
-          either (const (pure ())) (const (waitFor path (n - 1))) alive
+    Right _ -> do
+      -- A daemon does not delete its socket file on the way out, so the only
+      -- way to ask whether it has gone is to try to talk to it.
+      gone <- waitFor (isLeft <$> sendCommand path ["state"])
+      unless gone $
+        hPutStrLn stderr "nad: the running nad has not exited; starting anyway."
 
-    pollDelay = 100000
-    restartTimeout = 50 :: Int -- 5 seconds
+-- | Poll a condition every 100ms for up to five seconds. Both halves of a
+-- restart are a wait for the socket to change hands, in opposite directions.
+waitFor :: IO Bool -> IO Bool
+waitFor done = go (50 :: Int)
+  where
+    go n = do
+      finished <- done
+      if finished || n <= 0 then pure finished else threadDelay 100000 >> go (n - 1)
 
 recompileOnly :: IO ()
 recompileOnly = do

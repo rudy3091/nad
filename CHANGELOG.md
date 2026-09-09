@@ -19,9 +19,12 @@
 * `cfgPin` now decides the display a window *opens* on rather than holding it
   there for good.
 * `nad query state` reports the display-to-workspace bindings.
-* New `nad restart`: quits a running nad through the control socket, waits for
-  it to exit, and starts in its place. Quitting rather than killing means the
-  system shortcuts it took over are handed back.
+* New `nad restart`, for putting the status bar right after the displays
+  change: bars are built once per display at start-up, so plugging a monitor in
+  or out mid-session leaves them stale. It quits a running nad through the
+  control socket — so the system shortcuts it took over are handed back — waits
+  for it to exit, then starts a new one in its own session and returns. No `&`
+  needed.
 
 ## 0.1.0.0 -- YYYY-mm-dd
 

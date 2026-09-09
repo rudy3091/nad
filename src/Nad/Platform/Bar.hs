@@ -32,6 +32,7 @@ initApp = c_app_init
 --
 -- ponytail: bars are created once. Plugging in a display mid-session needs a
 -- restart until there is a display-reconfiguration callback to hang this off.
+-- That is what @nad restart@ is for.
 createBars :: BarConfig -> Double -> [ScreenInfo] -> IO [Bar]
 createBars cfg mainHeight screens = mapMaybe id <$> mapM create screens
   where

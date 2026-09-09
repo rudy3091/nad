@@ -81,7 +81,9 @@ come into it, so a window keeps its display across a workspace switch.
   workspace the next display is showing. The keyboard stays behind.
 - Plugging a display in gives it the lowest workspace nothing else is showing;
   unplugging one leaves its windows on their workspace, reachable with `View`.
-  The status bar still needs a nad restart to appear on a new display.
+  The status bar is the exception: bars are built once per display at start-up,
+  so after the monitor layout changes they are stale until `nad restart` builds
+  them again. That is what the command is for.
 
 nad cannot see a window the user focused with the mouse, so clicking on the
 other display does not move the keyboard there. `cmd-alt-right` does.
