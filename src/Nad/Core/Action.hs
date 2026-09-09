@@ -33,12 +33,17 @@ data Action
     -- window's size from its neighbours.
     ResizeWindow Double Double
   | CycleLayout
-  | -- | Show a workspace on the focused screen.
+  | -- | Show a workspace on the focused screen. When another screen is already
+    -- showing it, the two screens trade workspaces.
     View Int
   | -- | Send the focused window to a workspace.
     MoveToWorkspace Int
-  | -- | Send the focused window to the next or previous screen.
+  | -- | Send the focused window to the workspace the next or previous screen is
+    -- showing. The focus stays where it is.
     MoveToScreen Direction
+  | -- | Move the keyboard focus to the next or previous screen, leaving every
+    -- window where it is.
+    FocusScreen Direction
   | -- | Re-apply the current layout, e.g. after an app moved its own window.
     Retile
   | Quit
@@ -63,6 +68,8 @@ actionNames =
   , ("cycle-layout", CycleLayout)
   , ("screen-next", MoveToScreen Next)
   , ("screen-prev", MoveToScreen Prev)
+  , ("focus-screen-next", FocusScreen Next)
+  , ("focus-screen-prev", FocusScreen Prev)
   , ("retile", Retile)
   , ("quit", Quit)
   ]

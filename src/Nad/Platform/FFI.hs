@@ -113,3 +113,9 @@ foreign import ccall safe "nad_bar_set"
 
 foreign import ccall safe "nad_bar_destroy_all"
   c_bar_destroy_all :: IO ()
+
+foreign import ccall safe "nad_border_set"
+  c_border_set :: CDouble -> CDouble -> CDouble -> CDouble -> CString -> CDouble -> IO ()
+
+foreign import ccall safe "nad_border_hide"
+  c_border_hide :: IO ()

@@ -27,6 +27,7 @@ import Nad.Types.Config
   )
 import Nad.Types.Key
 import Nad.Types.Window (ScreenInfo (..), WindowInfo (..), WindowRef (..), screenFor)
+import Nad.Platform.Border (borderRect)
 
 main :: IO ()
 main = do
@@ -165,6 +166,25 @@ checks =
   , ("sync puts new windows first", stackItems (Stack.sync [1, 2, 3, 9] three) == [9, 1, 2, 3])
   , ("a closed focus falls back to master", stackFocus (Stack.sync [2, 3] three) == Just 2)
   , ("removing is idempotent", Stack.remove 1 (Stack.remove 1 three) == Stack.remove 1 three)
+  , -- screens and the workspaces they show
+    ("each display gets a workspace of its own", stVisible (syncScreens [0, 1] loaded) == [(0, 1), (1, 2)])
+  , ("a display keeps the workspace it was showing", stVisible (syncScreens [0, 1] twoUp) == stVisible twoUp)
+  , ("unplugging a display drops its binding", stVisible (syncScreens [0] twoUp) == [(0, 1)])
+  , ("...and takes the focus back to an attached one", stScreen (syncScreens [0] (apply (FocusScreen Next) twoUp)) == 0)
+  , ("a poll that sees no displays at all changes nothing", syncScreens [] twoUp == twoUp)
+  , ("focusing the next screen switches which workspace keys apply to", stCurrent (apply (FocusScreen Next) twoUp) == 2)
+  , ("focusing wraps back around", stScreen (times 2 (apply (FocusScreen Next)) twoUp) == 0)
+  , ("there is no other screen to focus on one display", apply (FocusScreen Next) loaded == loaded)
+  , ("viewing a hidden workspace leaves the other display alone", stVisible (apply (View 3) twoUp) == [(0, 3), (1, 2)])
+  , ("viewing a workspace another display holds swaps the two", stVisible (apply (View 2) twoUp) == [(0, 2), (1, 1)])
+  , ("viewing the workspace already here does nothing", apply (View 1) twoUp == twoUp)
+  , ("moving a window to the next screen puts it on that screen's workspace", workspaceOf 1 (apply (MoveToScreen Next) twoUp) == Just 2)
+  , ("...and the focus stays behind", stScreen (apply (MoveToScreen Next) twoUp) == 0)
+  , -- The regression this whole model exists for: a window used to come back
+    -- from a workspace switch on whatever display its parked coordinates
+    -- happened to land on, which was always the first one.
+    ("a window keeps its display across a workspace round trip", stackItems (stackOn 1 roundTripped) == [4])
+  , ("...and does not turn up on the other display", stackItems (stackOn 0 roundTripped) == [1, 2, 3])
   , -- state
     ("actions apply to the current workspace", stackItems (currentStack (apply SwapMaster loaded)) == [2, 1, 3])
   , ("viewing an unknown workspace is ignored", stCurrent (apply (View 99) loaded) == 1)
@@ -210,6 +230,8 @@ checks =
   , ("separators in a window title cannot corrupt the encoding", length (splitOn '\x1e' (encodeSegments [seg "a\x1eb"])) == 1)
   , ("an empty bar encodes to nothing", encodeSegments [] == "")
   , ("the default render marks the current workspace", barLeft (defaultRender sampleBar) /= [])
+  , -- Three states, three looks: here, on the other display, not showing.
+    ("the default render distinguishes a workspace on another display", length (nubSegs (barLeft (defaultRender sampleBar))) == 3)
   , ("a top bar takes height off the top", screenUsable (reserveBar defaultBar oneScreen) == Rect 0 26 1440 874)
   , ("a disabled bar takes nothing", screenUsable (reserveBar defaultBar {barEnabled = False} oneScreen) == screen)
   , ("a bottom bar leaves the top alone", rectY (screenUsable (reserveBar defaultBar {barPosition = Bottom} oneScreen)) == 0)
@@ -217,6 +239,9 @@ checks =
     -- the top of the display, not from where macOS left off.
     ("a bar shorter than the menu bar costs no space", screenUsable (reserveBar defaultBar notched) == screenUsable notched)
   , ("a bar taller than the menu bar takes only the difference", screenUsable (reserveBar defaultBar {barHeight = 50} notched) == Rect 0 50 1440 826)
+  , -- focus border
+    ("the outline surrounds the window it marks", borderRect 5 (Rect 100 100 400 300) == Rect 95 95 410 310)
+  , ("the window is still fully inside its outline", borderRect 5 (Rect 100 100 400 300) `contains` Rect 100 100 400 300)
   , -- cli
     ("query windows parses", parseCommand ["query", "windows"] == QueryWindows)
   , ("no arguments runs the daemon", parseCommand [] == Daemon)
@@ -233,17 +258,31 @@ checks =
     notched = ScreenInfo 0 screen (Rect 0 38 1440 (900 - 38 - 24))
     Just space = parseCombo "cmd-alt-space"
     Just dee = parseCombo "cmd-alt-d"
-    sampleBar = BarState [(1, True, 2), (2, False, 0)] "Tall" "editor" 0 "14:32"
+    sampleBar = BarState [(1, True, 2), (2, False, 0), (3, False, 1)] [3] "Tall" "editor" 0 "14:32"
     splitOn sep xs = case break (== sep) xs of
       (chunk, []) -> [chunk]
       (chunk, _ : rest) -> chunk : splitOn sep rest
     loaded = (initialState 9 defaultLayouts) {stWorkspaces = [Workspace 1 three, Workspace 2 Stack.empty]}
+    -- Two displays: screen 0 showing workspace 1 with three windows, screen 1
+    -- showing workspace 2. Workspace 3 is spare, for viewing something hidden.
+    threeWorkspaces stack2 =
+      (initialState 9 defaultLayouts)
+        {stWorkspaces = [Workspace 1 three, Workspace 2 stack2, Workspace 3 Stack.empty]}
+    twoUp = syncScreens [0, 1] (threeWorkspaces Stack.empty)
+    -- Window 4 sits on screen 1; that screen then looks at another workspace
+    -- and comes back.
+    roundTripped =
+      apply (View 2) . apply (View 3) . apply (FocusScreen Next) $
+        syncScreens [0, 1] (threeWorkspaces (Stack.fromList [4]))
     -- Window 1 sent to workspace 2, then a poll that saw nothing at all, as
     -- happens while the machine is asleep.
     asleep = syncWindows (const Nothing) [] (apply (MoveToWorkspace 2) loaded)
     woken = syncWindows (const Nothing) [1, 2, 3] asleep
     times n f = foldr (.) id (replicate n f)
     nubRects = foldr (\r acc -> if r `elem` acc then acc else r : acc) []
+    -- Segments differing only in colour, so "three looks" is a real count.
+    nubSegs = foldr (\s acc -> if styleOf s `elem` map styleOf acc then acc else s : acc) []
+    styleOf s = (segFg s, segBg s)
     twoScreens =
       [ ScreenInfo 0 screen screen
       , ScreenInfo 1 (Rect 1440 0 1440 900) (Rect 1440 0 1440 900)

@@ -113,4 +113,13 @@ int nad_bar_create(double x, double y, double width, double height, const char *
 void nad_bar_set(int bar, const char *left, const char *center, const char *right);
 void nad_bar_destroy_all(void);
 
+// --- Focus border ----------------------------------------------------------
+// A single transparent overlay window outlining the focused window. AX cannot
+// draw on another application's window, so nad puts its own on top. Geometry is
+// Cocoa coordinates and names the outline's own frame, outer edge included.
+
+void nad_border_set(double x, double y, double width, double height,
+                    const char *color, double thickness);
+void nad_border_hide(void);
+
 #endif

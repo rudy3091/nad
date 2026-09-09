@@ -55,13 +55,35 @@ trustworthy — inside a nad checkout, `cabal exec -- ghc -fno-code
 
 | Field           | Type                | Default           | What it does                                     |
 | --------------- | ------------------- | ----------------- | ------------------------------------------------ |
-| `cfgKeys`       | `[(String, Action)]`| 18 + 18 bindings  | Bindings, as `("cmd-alt-j", Focus Next)`         |
+| `cfgKeys`       | `[(String, Action)]`| 20 + 18 bindings  | Bindings, as `("cmd-alt-j", Focus Next)`         |
 | `cfgLayouts`    | `[LayoutSpec]`      | `defaultLayouts`  | Head is active; `CycleLayout` rotates the list   |
 | `cfgFloats`     | `[Rule]`            | 4 rules           | Windows left exactly where their app put them    |
 | `cfgAssign`     | `[(Rule, Int)]`     | `[]`              | The workspace a window opens on                  |
-| `cfgPin`        | `[(Rule, Int)]`     | `[]`              | The display a window is kept on                  |
+| `cfgPin`        | `[(Rule, Int)]`     | `[]`              | The display a window opens on                    |
 | `cfgWorkspaces` | `Int`               | `9`               | How many workspaces exist                        |
 | `cfgBar`        | `BarConfig`         | `defaultBar`      | The status bar                                   |
+| `cfgBorder`     | `BorderConfig`      | `defaultBorder`   | The outline around the focused window            |
+
+## Workspaces and displays
+
+Each display shows one workspace, and no two displays ever show the same one —
+the xmonad model. This is what decides which display a window is on: a window
+belongs to a workspace, and the workspace is on a display. Coordinates never
+come into it, so a window keeps its display across a workspace switch.
+
+- `View 3` (`cmd-alt-3`) shows workspace 3 **on the focused display only**. If
+  another display is already showing it, the two displays trade workspaces.
+- `FocusScreen Next` (`cmd-alt-right`) moves the keyboard to the next display.
+  Everything else — `Focus`, `Swap`, `View`, `MoveToWorkspace` — applies to
+  whichever display has it.
+- `MoveToScreen Next` (`cmd-alt-shift-right`) sends the focused window to the
+  workspace the next display is showing. The keyboard stays behind.
+- Plugging a display in gives it the lowest workspace nothing else is showing;
+  unplugging one leaves its windows on their workspace, reachable with `View`.
+  The status bar still needs a nad restart to appear on a new display.
+
+nad cannot see a window the user focused with the mouse, so clicking on the
+other display does not move the keyboard there. `cmd-alt-right` does.
 
 ## Rules
 
@@ -84,9 +106,10 @@ All three rule settings match the same way, and the first matching rule wins.
   `cmd-alt-shift-N` stays where the user put it. A number outside the range is
   ignored. Windows already open when the rule is added are not moved.
 - `cfgPin` names a display index, the one `nad query screens` prints, where `0`
-  is the display with the menu bar. It keeps holding: a pinned window goes back
-  on the next poll, so `cmd-alt-shift-right` cannot take it elsewhere. A rule
-  naming a display that is not attached is ignored.
+  is the display with the menu bar. The window opens on whatever workspace that
+  display is showing at the time, so like `cfgAssign` it applies **once** and
+  the user can move the window afterwards. `cfgAssign` wins when both match, and
+  a rule naming a display that is not attached is ignored.
 
 ## Layouts
 
@@ -126,15 +149,17 @@ ResizeMaster Double                -- grow/shrink the master area, e.g. 0.05
 IncMaster Int                      -- windows sharing the master area, e.g. 1
 ResizeWindow Double Double         -- dw dh, fractions of the screen; Stacking only
 CycleLayout
-View Int                           -- show workspace N
+View Int                           -- show workspace N on the focused display
 MoveToWorkspace Int                -- send the focused window to workspace N
-MoveToScreen Next | MoveToScreen Prev
+MoveToScreen Next | Prev           -- send it to the next display's workspace
+FocusScreen Next  | Prev           -- move the keyboard to the next display
 Retile                             -- re-apply the layout
 Quit
 ```
 
 The same actions are reachable from the shell as `nad msg focus-next`,
-`nad msg workspace 3`, `nad msg move-to-workspace 3`, and so on.
+`nad msg workspace 3`, `nad msg move-to-workspace 3`,
+`nad msg focus-screen-next`, and so on.
 
 ## Key bindings
 
@@ -179,11 +204,12 @@ possible; everything it can say comes from `BarState`.
 
 ```haskell
 data BarState = BarState
-  { bsWorkspaces :: [(Int, Bool, Int)]  -- id, is showing, window count
-  , bsLayout     :: String
-  , bsFocused    :: String              -- focused window title, "" when none
-  , bsScreen     :: Int                 -- which display this bar is on
-  , bsClock      :: String              -- "HH:MM"
+  { bsWorkspaces   :: [(Int, Bool, Int)]  -- id, showing on *this* bar's display, window count
+  , bsOtherScreens :: [Int]               -- workspaces showing on the other displays
+  , bsLayout       :: String
+  , bsFocused      :: String              -- focused window title here, "" when none
+  , bsScreen       :: Int                 -- which display this bar is on
+  , bsClock        :: String              -- "HH:MM"
   }
 
 data BarContent = BarContent {barLeft, barCenter, barRight :: [Segment]}
@@ -196,6 +222,29 @@ defaultRender :: BarState -> BarContent
 ```
 
 Colours are `"#RRGGBB"` strings.
+
+Each display's bar gets its own `BarState`, so `bsWorkspaces` marks a different
+workspace on each. `bsOtherScreens` is what lets a renderer show "on the other
+display" as a third state, distinct from both current and hidden.
+
+## Focus border
+
+```haskell
+data BorderConfig = BorderConfig
+  { borderEnabled :: Bool    -- True
+  , borderWidth   :: Double  -- 3, points, drawn just outside the window's edge
+  , borderColor   :: String  -- "#cccccc", a soft white
+  }
+```
+
+An overlay nad draws around the focused window — with more than one display it
+is the only thing saying which display the keyboard is on. Floating windows
+(`cfgFloats`) are not tracked by nad's focus, so they never get one.
+
+```haskell
+  { cfgBorder = defaultBorder {borderColor = "#ff8800"} }
+  { cfgBorder = defaultBorder {borderEnabled = False} }
+```
 
 ## Traps
 

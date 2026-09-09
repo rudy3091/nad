@@ -12,10 +12,9 @@ module Nad.Runtime
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM
-import Control.Monad (forM_, forever, unless, void, when)
+import Control.Monad (forM, forM_, forever, unless, void, when)
 import Data.IORef
-import Data.List (find, foldl')
-import Data.Maybe (listToMaybe)
+import Data.List (find)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
@@ -24,12 +23,13 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (getZonedTime)
 
 import Nad.Bar.Segment (BarState (..))
-import Nad.Core.Action (Action (..), Direction (..), parseAction)
+import Nad.Core.Action (Action (..), parseAction)
 import Nad.Core.Layout (arrangeWith, draggedPlacements, layoutName)
 import Nad.Core.Stack (Stack (..))
 import Nad.Core.State
 import Nad.Ipc (serve, socketPath)
 import Nad.Platform.Bar (Bar (..), createBars, initApp, updateBar)
+import Nad.Platform.Border (hideBorder, showBorder)
 import Nad.Platform.Hotkey
   ( claimSystemHotkeys
   , releaseStaleHotkeys
@@ -43,8 +43,8 @@ import Nad.Platform.Screen (listScreens, mainScreenHeight)
 import Nad.Platform.Window (focusWindow, listWindows, requestTrust, setWindowFrame)
 import Nad.Types.Config
   ( BarConfig (..)
+  , BorderConfig
   , Config (..)
-  , Rule
   , bindings
   , reserveBar
   , ruleValue
@@ -154,13 +154,18 @@ describeState :: WMState WindowRef -> String
 describeState st =
   unlines $
     ("workspace  " <> unwords (map marked (stWorkspaces st)))
+      : ("screens    " <> unwords (map showing (stVisible st)))
       : ("layout     " <> layoutName (currentLayout st))
       : ("windows    " <> show (length (stackItems (currentStack st))))
       : [ "focus      " <> maybe "none" (const "set") (focusedWindow st) ]
   where
     marked ws =
       let label = show (wsId ws) <> ":" <> show (length (stackItems (wsStack ws)))
-       in if wsId ws == stCurrent st then "[" <> label <> "]" else label
+       in if wsId ws `elem` visibleWorkspaces st then "[" <> label <> "]" else label
+
+    -- The focused display is the one keys apply to, so mark it.
+    showing (s, n) =
+      show s <> "=" <> show n <> (if s == stScreen st then "*" else "")
 
 worker :: Config -> [Bar] -> TQueue Event -> IORef (WMState WindowRef) -> IO ()
 worker cfg bars queue state = loop
@@ -171,109 +176,113 @@ worker cfg bars queue state = loop
       -- Layouts tile what is left after the bar has taken its strip.
       screens <- map (reserveBar (cfgBar cfg)) <$> listScreens
 
-      let tileable0 = filter (not . shouldFloat (cfgFloats cfg)) windows
-          -- Rules match on app name and title, which only WindowInfo carries.
-          byRef rules ref =
-            find ((== ref) . winRef) tileable0 >>= ruleValue rules
+      let tileable = filter (not . shouldFloat (cfgFloats cfg)) windows
       st0 <- readIORef state
-      let st1 = syncWindows (byRef (cfgAssign cfg)) (map winRef tileable0) st0
+      -- Displays first: which workspace a window belongs to can depend on
+      -- which display is showing what, and a display that has just been
+      -- plugged in needs a workspace before anything is laid out on it.
+      let st1 = syncScreens (map screenIndex screens) st0
+          st2 = syncWindows (opensOn cfg tileable st1) (map winRef tileable) st1
           -- Before anything else, because the layout pass at the end runs on
           -- every event while the poll only comes once a second: a hotkey
           -- pressed in between would otherwise re-tile over a drag nad had not
           -- recorded yet, and put the window back for good.
-          dragged = adoptDrags (cfgPin cfg) screens tileable0 st1
-          st2 = case event of
+          dragged = adoptDrags screens tileable st2
+          st3 = case event of
             Refresh -> dragged
             Perform action -> apply action dragged
-      writeIORef state st2
+      writeIORef state st3
 
-      -- Moving between screens is the one action that has to touch a window
-      -- before the layout pass, because which screen a window belongs to is
-      -- read back off its position.
-      tileable <- case event of
-        Perform (MoveToScreen dir) -> sendToScreen screens tileable0 st2 dir
-        _ -> pure tileable0
+      focusFrame <- reconcile screens tileable st3
+      when (event /= Refresh) (refocus tileable st3)
+      paintBars (cfgBar cfg) bars tileable st3
+      paintBorder (cfgBorder cfg) focusFrame
 
-      reconcile (cfgPin cfg) screens tileable st2
-      when (event /= Refresh) (refocus tileable st2)
-      paintBars (cfgBar cfg) bars tileable st2
+      if stRunning st3 then loop else hideBorder >> stopEventLoop
 
-      if stRunning st2 then loop else stopEventLoop
+-- | Where a window nad has never seen before opens: the workspace a rule names,
+-- or the one showing on the display a rule pins it to. Rules match on app name
+-- and title, which only 'WindowInfo' carries, so this resolves a 'WindowRef'
+-- back to one first.
+opensOn :: Config -> [WindowInfo] -> WMState WindowRef -> WindowRef -> Maybe Int
+opensOn cfg windows st ref = do
+  w <- find ((== ref) . winRef) windows
+  case ruleValue (cfgAssign cfg) w of
+    Just n -> Just n
+    Nothing -> ruleValue (cfgPin cfg) w >>= (`workspaceOn` st)
 
 -- | Redraw every bar from the state the worker just settled on.
 paintBars :: BarConfig -> [Bar] -> [WindowInfo] -> WMState WindowRef -> IO ()
 paintBars _ [] _ _ = pure ()
 paintBars cfg bars windows st = do
   clock <- formatTime defaultTimeLocale "%H:%M" <$> getZonedTime
-  forM_ bars $ \bar ->
+  -- A bar whose display has been unplugged has nothing to say. Its window is
+  -- still around until nad restarts; leave the last thing it drew on it.
+  forM_ [bar | bar <- bars, barScreen bar `elem` map fst (stVisible st)] $ \bar ->
     updateBar bar (barRender cfg (barState clock (barScreen bar) windows st))
 
+-- | What one bar says. Every display shows its own workspace, so this is
+-- computed per bar rather than once for all of them.
 barState :: String -> Int -> [WindowInfo] -> WMState WindowRef -> BarState
 barState clock screen windows st =
   BarState
     { bsWorkspaces =
-        [ (wsId ws, wsId ws == stCurrent st, length (stackItems (wsStack ws)))
+        [ (wsId ws, Just (wsId ws) == here, length (stackItems (wsStack ws)))
         | ws <- stWorkspaces st
         ]
+    , bsOtherScreens = [n | n <- visibleWorkspaces st, Just n /= here]
     , bsLayout = layoutName (currentLayout st)
     , bsFocused = maybe "" winTitle focused
     , bsScreen = screen
     , bsClock = clock
     }
   where
-    focused = focusedWindow st >>= \ref -> find ((== ref) . winRef) windows
+    here = workspaceOn screen st
+    focused =
+      stackFocus (stackOn screen st) >>= \ref -> find ((== ref) . winRef) windows
 
--- | Make the screen match the state.
+-- | Make the screen match the state, and report the frame the focused window
+-- ended up with so the border can be drawn on it.
 --
--- Windows of the current workspace are placed by the layout of the screen they
--- sit on; windows of every other workspace are parked off screen.
-reconcile :: [(Rule, Int)] -> [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> IO ()
-reconcile pins screens windows st = do
-  forM_ (onScreens pins screens windows st) $ \(screen, here) -> do
+-- Every display lays out the workspace it is showing; windows of a workspace no
+-- display is showing are parked off screen.
+reconcile
+  :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> IO (Maybe Rect)
+reconcile screens windows st = do
+  placed <- fmap concat $ forM (onScreens screens windows st) $ \(screen, here) -> do
     let sizing w = placeOf st (winRef w)
-    forM_ (arrangeWith (currentLayout st) (screenUsable screen) sizing here) $ \(w, rect) ->
-      void (setWindowFrame (winRef w) rect)
+        frames = arrangeWith (currentLayout st) (screenUsable screen) sizing here
+    forM_ frames $ \(w, rect) -> void (setWindowFrame (winRef w) rect)
+    pure frames
   forM_ hidden $ \w -> void (setWindowFrame (winRef w) (parkingSpot screens (winFrame w)))
+  pure $ do
+    ref <- focusedWindow st
+    lookup ref [(winRef w, rect) | (w, rect) <- placed]
   where
-    hidden = [w | w <- windows, winRef w `notElem` stackItems (currentStack st)]
+    shown = concatMap (stackItems . (`stackOn` st) . screenIndex) screens
+    hidden = [w | w <- windows, winRef w `notElem` shown]
 
--- | The current workspace's windows, in stack order, grouped by the screen they
--- sit on. This is the split both the layout pass and drag adoption work from.
-onScreens
-  :: [(Rule, Int)]
-  -> [ScreenInfo]
-  -> [WindowInfo]
-  -> WMState WindowRef
-  -> [(ScreenInfo, [WindowInfo])]
-onScreens pins screens windows st =
-  [ (screen, [w | w <- visible, assignedTo w == Just (screenIndex screen)])
+-- | What each display shows, in stack order. This is the split both the layout
+-- pass and drag adoption work from.
+--
+-- A window's display follows from the workspace it is on, so a window keeps its
+-- display across a workspace switch even though it spent the meantime parked
+-- off screen at coordinates that are on no display at all.
+onScreens :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> [(ScreenInfo, [WindowInfo])]
+onScreens screens windows st =
+  [ (screen, ordered (stackItems (stackOn (screenIndex screen) st)))
   | screen <- screens
   ]
   where
-    order = stackItems (currentStack st)
     -- Follow the stack's order, not the order macOS happened to report.
-    visible = [w | ref <- order, Just w <- [find ((== ref) . winRef) windows]]
-
-    -- A pinned window belongs to its display whatever its coordinates say, and
-    -- the layout pass below moves it there. That also means MoveToScreen cannot
-    -- take it anywhere else: the next poll pulls it back, which is the point.
-    -- A pin naming an unplugged display falls through to the position.
-    --
-    -- A window returning from another workspace is still parked off screen, so
-    -- it belongs to no display. Give it the first one rather than dropping it.
-    assignedTo w = case ruleValue pins w of
-      Just i | i `elem` map screenIndex screens -> Just i
-      _ -> case screenFor screens (winFrame w) of
-        Just s -> Just (screenIndex s)
-        Nothing -> screenIndex <$> listToMaybe screens
+    ordered refs = [w | ref <- refs, Just w <- [find ((== ref) . winRef) windows]]
 
 -- | Let the mouse resize a window in the Stacking layout: instead of putting it
 -- back where the layout wanted it on the next poll, keep the frame the user
 -- dragged it to. Its origin comes along, or grabbing the top-right corner would
 -- pull the window up and to the left while the pointer is still on it.
-adoptDrags
-  :: [(Rule, Int)] -> [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> WMState WindowRef
-adoptDrags pins screens windows st = foldl' adopt st drags
+adoptDrags :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> WMState WindowRef
+adoptDrags screens windows st = foldl' adopt st drags
   where
     adopt s (w, placement) = place (winRef w) placement s
 
@@ -283,7 +292,7 @@ adoptDrags pins screens windows st = foldl' adopt st drags
     drags =
       concat
         [ draggedPlacements spec area (Just . winFrame) (arrangeWith spec area sizing here)
-        | (screen, here) <- onScreens pins screens windows st
+        | (screen, here) <- onScreens screens windows st
         , let area = screenUsable screen
         ]
 
@@ -305,26 +314,14 @@ refocus windows st = case focusedWindow st of
   Nothing -> pure ()
   Just ref -> forM_ (find ((== ref) . winRef) windows) (void . focusWindow . winRef)
 
--- | Drop the focused window onto the next or previous screen and report the
--- window list with its new position, so the layout pass that follows assigns it
--- to the screen it just landed on.
-sendToScreen
-  :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> Direction -> IO [WindowInfo]
-sendToScreen screens windows st dir
-  | length screens < 2 = pure windows
-  | otherwise = case focusedWindow st >>= \ref -> find ((== ref) . winRef) windows of
-      Nothing -> pure windows
-      Just w -> case targetScreen w of
-        Nothing -> pure windows
-        Just target -> do
-          void (setWindowFrame (winRef w) (screenUsable target))
-          pure [if winRef x == winRef w then x {winFrame = screenUsable target} else x | x <- windows]
-  where
-    step = case dir of
-      Next -> 1
-      Prev -> -1
-
-    targetScreen w = do
-      current <- screenFor screens (winFrame w)
-      i <- lookup (screenIndex current) (zip (map screenIndex screens) [0 ..])
-      pure (screens !! ((i + step) `mod` length screens))
+-- | Outline the focused window, or hide the outline when nothing is focused.
+--
+-- The frame comes from the layout pass rather than from the poll, so the
+-- outline never lags a window that has just been re-tiled. Floating windows are
+-- not in the layout at all and so never get one.
+paintBorder :: BorderConfig -> Maybe Rect -> IO ()
+paintBorder cfg frame = case frame of
+  Nothing -> hideBorder
+  Just r -> do
+    mainHeight <- mainScreenHeight
+    showBorder cfg mainHeight r

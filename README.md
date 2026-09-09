@@ -11,9 +11,10 @@ APIs, no SIP changes.
 - Tall (master/stack), Full and Stacking layouts, with gaps
 - Keyboard focus, window swapping, master ratio and master count
 - Nine workspaces, independent of macOS Spaces
-- Multi-monitor: each display tiles on its own
-- Rules: which workspace an app opens on, which display it stays on, and which
+- Multi-monitor: every display shows a workspace of its own, xmonad-style
+- Rules: which workspace an app opens on, which display it opens on, and which
   apps to leave alone entirely
+- An outline around the focused window, so the focused display is obvious
 - A configurable status bar drawn as a borderless window per display
 - A control socket, so the same actions are available from the shell
 
@@ -71,8 +72,9 @@ nad doctor              # permissions, config and socket
 
 Default bindings use `cmd-alt`: `j`/`k` to move focus, `shift-j`/`shift-k` to
 move a window, `return` to promote to master, `h`/`l` to resize master, `space`
-to cycle layouts, `1`–`9` for workspaces, `q` to quit. `nad query keys` prints
-the full list.
+to cycle layouts, `1`–`9` for workspaces, `left`/`right` to move between
+displays (`shift` to take the window along), `q` to quit. `nad query keys`
+prints the full list.
 
 In the Stacking layout, `cmd-alt-ctrl` plus `h`/`l`/`k`/`j` resizes the focused
 window itself (narrower, wider, shorter, taller). The tiled layouts ignore it:
@@ -85,6 +87,38 @@ left side keeps the window where you left it rather than snapping its corner bac
 to the cascade. Dragging a window's title bar to only move it still hands it back
 to the cascade, and the tiled layouts still pull a dragged window back into its
 tile, for the same reason they ignore the resize keys.
+
+### Workspaces and displays
+
+Every display shows one workspace, and no two displays ever show the same one.
+That is xmonad's model, and it is what makes "which display is this window on"
+answerable at all: a window belongs to a workspace, the workspace is on a
+display, and the window's coordinates never come into it. A window therefore
+keeps its display across a workspace switch, even though it spent the meantime
+parked off screen.
+
+- `cmd-alt-3` shows workspace 3 **on the focused display only**. When another
+  display is already showing it, the two displays trade workspaces.
+- `cmd-alt-left` / `cmd-alt-right` move the keyboard between displays.
+  Everything else — focus, swapping, `cmd-alt-N`, `cmd-alt-shift-N` — applies to
+  whichever display has it.
+- `cmd-alt-shift-left` / `cmd-alt-shift-right` send the focused window to the
+  workspace the neighbouring display is showing, and leave the keyboard behind.
+- Plugging a display in gives it the lowest workspace nothing else is showing.
+  Unplugging one leaves its windows on their workspace, still reachable with
+  `cmd-alt-N`. The status bar is the exception: it needs a restart to appear on
+  a display added mid-session.
+
+`nad query state` prints the bindings, with `*` on the focused display:
+
+```
+screens    0=1* 1=3
+```
+
+nad has no way to read which window macOS considers focused, so clicking on the
+other display does not move the keyboard there — `cmd-alt-right` does. The
+outline nad draws around the focused window is what makes that visible; turn it
+off or restyle it with `cfgBorder`.
 
 ### System shortcuts
 
@@ -165,6 +199,7 @@ main =
       , cfgFloats = RuleApp "Activity Monitor" : cfgFloats defaultConfig
       , cfgAssign = [(RuleApp "kitty", 1), (RuleApp "Safari", 2)]
       , cfgPin = [(RuleApp "kitty", 0)]
+      , cfgBorder = defaultBorder {borderWidth = 4, borderColor = "#ff8800"}
       , cfgBar =
           defaultBar
             { barPosition = Bottom
@@ -198,17 +233,17 @@ The first rule that matches a window wins.
 | ----------- | -------------------------------- | --------------- |
 | `cfgFloats` | apps to leave where they are     | `[Rule]`        |
 | `cfgAssign` | the workspace a window opens on  | `[(Rule, Int)]` |
-| `cfgPin`    | the display a window is kept on  | `[(Rule, Int)]` |
+| `cfgPin`    | the display a window opens on    | `[(Rule, Int)]` |
 
 `cfgAssign` applies the first time nad sees a window and never again, so moving
 one with `cmd-alt-shift-N` afterwards sticks. It names a workspace, `1` to
 `cfgWorkspaces`; a number outside that range is ignored.
 
 `cfgPin` names a display index, the same one `nad query screens` prints, where
-`0` is the display with the menu bar. It holds: a pinned window goes back on the
-next poll, so `cmd-alt-shift-right` cannot take it elsewhere. A rule naming a
-display that is not attached is ignored, so unplugging a monitor leaves the
-window where it is rather than losing it.
+`0` is the display with the menu bar. The window joins whatever workspace that
+display is showing at the time, so like `cfgAssign` it applies once and the user
+stays in charge afterwards. `cfgAssign` wins when both match, and a rule naming a
+display that is not attached is ignored.
 
 ### Writing the config with Claude Code
 

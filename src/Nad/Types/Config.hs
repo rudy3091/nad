@@ -5,8 +5,10 @@ module Nad.Types.Config
   , Rule (..)
   , BarConfig (..)
   , BarPosition (..)
+  , BorderConfig (..)
   , defaultConfig
   , defaultBar
+  , defaultBorder
   , matches
   , ruleValue
   , shouldFloat
@@ -81,6 +83,29 @@ reserveBar cfg screen
          in r {rectY = top, rectH = max 0 (rectBottom r - top)}
       Bottom -> r {rectH = max 0 (rectH r - h)}
 
+-- | The outline drawn around the focused window. With more than one display
+-- this is the only thing saying which one the keyboard is on, so it is on by
+-- default.
+data BorderConfig = BorderConfig
+  { borderEnabled :: Bool
+  , borderWidth :: Double
+  -- ^ Thickness in points, drawn just outside the window's own edge.
+  , borderColor :: String
+  -- ^ @\"#RRGGBB\"@
+  }
+  deriving (Eq, Show)
+
+-- | A soft white rather than a pure one: bright enough to read against a dark
+-- window and against a light one, without the glare of @#ffffff@ on every edge
+-- of the screen all day.
+defaultBorder :: BorderConfig
+defaultBorder =
+  BorderConfig
+    { borderEnabled = True
+    , borderWidth = 3
+    , borderColor = "#cccccc"
+    }
+
 data Config = Config
   { cfgKeys :: [(String, Action)]
   -- ^ Bindings as @(\"cmd-alt-j\", action)@. Unparseable names are reported at
@@ -92,11 +117,14 @@ data Config = Config
   -- ^ The workspace a window opens on, as @(rule, workspace)@. Applies the
   -- first time nad sees a window and never again, so moving one by hand sticks.
   , cfgPin :: [(Rule, Int)]
-  -- ^ The display a window is kept on, as @(rule, screen index)@. Index 0 is
-  -- the display holding the menu bar. A rule naming a display that is not
-  -- attached is ignored.
+  -- ^ The display a window opens on, as @(rule, screen index)@. Index 0 is the
+  -- display holding the menu bar. The window joins whichever workspace that
+  -- display is showing at the time, so like 'cfgAssign' this applies the first
+  -- time nad sees a window and never again. 'cfgAssign' wins when both match,
+  -- and a rule naming a display that is not attached is ignored.
   , cfgWorkspaces :: Int
   , cfgBar :: BarConfig
+  , cfgBorder :: BorderConfig
   }
 
 defaultConfig :: Config
@@ -109,6 +137,7 @@ defaultConfig =
     , cfgPin = []
     , cfgWorkspaces = 9
     , cfgBar = defaultBar
+    , cfgBorder = defaultBorder
     }
 
 -- | cmd-alt is the modifier: cmd alone collides with nearly every app, and it
@@ -134,6 +163,9 @@ defaultKeys =
   , ("cmd-alt-ctrl-k", ResizeWindow 0 (-0.05))
   , ("cmd-alt-ctrl-j", ResizeWindow 0 0.05)
   , ("cmd-alt-r", Retile)
+  -- Focus moves between displays; add shift to take the window along.
+  , ("cmd-alt-left", FocusScreen Prev)
+  , ("cmd-alt-right", FocusScreen Next)
   , ("cmd-alt-shift-left", MoveToScreen Prev)
   , ("cmd-alt-shift-right", MoveToScreen Next)
   , ("cmd-alt-q", Quit)

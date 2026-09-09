@@ -170,3 +170,49 @@ void nad_bar_destroy_all(void) {
     [g_bars removeAllObjects];
   });
 }
+
+// --- Focus border ----------------------------------------------------------
+
+static NSWindow *g_border = nil;
+
+// Rounded to match macOS's own window corners, so the outline follows the
+// window's edge instead of cutting across it.
+static const CGFloat kBorderCornerRadius = 10;
+
+void nad_border_set(double x, double y, double width, double height,
+                    const char *color, double thickness) {
+  on_main(^{
+    if (g_border == nil) {
+      g_border = [[NSWindow alloc] initWithContentRect:NSZeroRect
+                                             styleMask:NSWindowStyleMaskBorderless
+                                               backing:NSBackingStoreBuffered
+                                                 defer:NO];
+      g_border.backgroundColor = [NSColor clearColor];
+      g_border.opaque = NO;
+      g_border.hasShadow = NO;
+      // Above ordinary windows so it is visible over the window it outlines,
+      // but below the bar's screen-saver level so it never covers the bar.
+      g_border.level = NSFloatingWindowLevel;
+      g_border.collectionBehavior =
+          NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary;
+      // Purely a readout: clicks belong to the window underneath.
+      g_border.ignoresMouseEvents = YES;
+      g_border.contentView.wantsLayer = YES;
+    }
+
+    // CALayer strokes inwards, so the caller sizes the frame to include the
+    // outline and the window it surrounds shows through the middle.
+    [g_border setFrame:NSMakeRect(x, y, width, height) display:NO];
+    CALayer *layer = g_border.contentView.layer;
+    layer.borderWidth = thickness;
+    layer.borderColor = parse_color(color, [NSColor whiteColor]).CGColor;
+    layer.cornerRadius = kBorderCornerRadius;
+    [g_border orderFrontRegardless];
+  });
+}
+
+void nad_border_hide(void) {
+  on_main(^{
+    [g_border orderOut:nil];
+  });
+}

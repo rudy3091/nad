@@ -34,10 +34,16 @@ data BarContent = BarContent
 -- should not have to know about nad's internal state types.
 data BarState = BarState
   { bsWorkspaces :: [(Int, Bool, Int)]
-  -- ^ Workspace id, whether it is showing, how many windows it holds.
+  -- ^ Workspace id, whether it is showing __on this bar's screen__, how many
+  -- windows it holds. Each display shows its own workspace, so this differs
+  -- from bar to bar.
+  , bsOtherScreens :: [Int]
+  -- ^ Workspaces showing on the other displays. Worth marking differently from
+  -- both the current one and a hidden one: they are on screen, just not here.
   , bsLayout :: String
   , bsFocused :: String
-  -- ^ Title of the focused window, empty when there is none.
+  -- ^ Title of the window focused on this bar's screen, empty when there is
+  -- none.
   , bsScreen :: Int
   -- ^ Which screen this bar is on, so a renderer can say so.
   , bsClock :: String
@@ -75,7 +81,12 @@ defaultRender st =
     }
   where
     workspace (wid, current, count)
-      | current = Segment (" " <> show wid <> " ") (Just "#1b1b1b") (Just "#88aaff")
-      | count > 0 = colored "#dddddd" (" " <> show wid <> " ")
+      | current = Segment (label wid) (Just "#1b1b1b") (Just "#88aaff")
+      -- Showing on another display: highlighted too, but dimly, so one glance
+      -- says which display the keyboard is on.
+      | wid `elem` bsOtherScreens st = Segment (label wid) (Just "#dddddd") (Just "#3a4257")
+      | count > 0 = colored "#dddddd" (label wid)
       -- An empty workspace is still worth showing, just quietly.
-      | otherwise = colored "#555555" (" " <> show wid <> " ")
+      | otherwise = colored "#555555" (label wid)
+
+    label wid = " " <> show wid <> " "

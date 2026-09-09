@@ -36,6 +36,7 @@ library
                       Nad.Core.Stack
                       Nad.Core.State
                       Nad.Platform.Bar
+                      Nad.Platform.Border
                       Nad.Platform.FFI
                       Nad.Platform.Hotkey
                       Nad.Platform.Marshal
@@ -60,7 +61,7 @@ library
     cc-options:       -fobjc-arc
     -- SkyLight is private: it is the only way to switch off a system shortcut
     -- that would otherwise shadow a key binding. See cbits/nad_hotkey.m.
-    frameworks:       Carbon Cocoa ApplicationServices CoreGraphics IOKit SkyLight
+    frameworks:       Carbon Cocoa ApplicationServices CoreGraphics QuartzCore IOKit SkyLight
     extra-framework-dirs: /System/Library/PrivateFrameworks
 
 executable nad
