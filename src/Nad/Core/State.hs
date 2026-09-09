@@ -38,6 +38,16 @@ data WMState w = WMState
   -- the user has actually resized or dragged appear here, and only
   -- 'Nad.Core.Layout.Stacking' reads them.
   , stPlaces :: ![(w, Placement)]
+  , -- | The workspace a window was on when it stopped being listed, newest
+    -- first. macOS stops answering Accessibility queries while it sleeps and
+    -- while an app is still waking up, so a window can vanish from one poll and
+    -- be back on the next; without this it would return as a window nad has
+    -- never seen and land on the current workspace.
+    --
+    -- ponytail: capped at 'exiledMemory' entries rather than aged out, because
+    -- 'WMState' has no clock. Windows past the cap are forgotten and come back
+    -- as new ones.
+    stExiled :: ![(w, Int)]
   , -- | Cleared by 'Quit', which is how the runtime knows to stop.
     stRunning :: !Bool
   }
@@ -50,8 +60,15 @@ initialState count layouts =
     , stCurrent = 1
     , stLayouts = layouts
     , stPlaces = []
+    , stExiled = []
     , stRunning = True
     }
+
+-- | How many vanished windows to remember the workspace of. A sleeping machine
+-- has to come back with all of them still in memory, so this is well past any
+-- plausible window count.
+exiledMemory :: Int
+exiledMemory = 256
 
 currentStack :: WMState w -> Stack w
 currentStack st =
@@ -101,24 +118,52 @@ workspaceOf w st = wsId <$> find (elem w . stackItems . wsStack) (stWorkspaces s
 
 -- | Fold the live window list into the state.
 --
--- Windows nad has never seen join the current workspace; windows that have gone
--- are dropped from wherever they were. A window on another workspace stays
--- there — that is the whole point of workspaces.
-syncWindows :: Eq w => [w] -> WMState w -> WMState w
-syncWindows live st =
+-- Windows nad has never seen join the workspace @assign@ names, or the current
+-- one when it names nothing; windows that have gone are dropped from wherever
+-- they were, but their workspace is remembered in 'stExiled' so that one
+-- coming back goes back to it. A window on another workspace stays there —
+-- that is the whole point of workspaces.
+--
+-- @assign@ is a function because 'WMState' knows nothing about its windows
+-- beyond their identity: the app name a rule matches on lives in the runtime.
+--
+-- ponytail: only ever consulted for windows nad has not seen before. Applying
+-- it on every poll would drag a window the user moved by hand straight back.
+syncWindows :: Eq w => (w -> Maybe Int) -> [w] -> WMState w -> WMState w
+syncWindows assign live st =
   st
     { stWorkspaces = map syncOne (stWorkspaces st)
     , -- A placement outlives nothing: drop it with its window, or a long
       -- session accumulates entries for windows that closed hours ago.
       stPlaces = [entry | entry <- stPlaces st, fst entry `elem` live]
+    , stExiled = take exiledMemory (gone <> [e | e <- stExiled st, fst e `notElem` live])
     }
   where
     known = concatMap (stackItems . wsStack) (stWorkspaces st)
     unseen = filter (`notElem` known) live
+    gone =
+      [ (w, wsId ws)
+      | ws <- stWorkspaces st
+      , w <- stackItems (wsStack ws)
+      , w `notElem` live
+      ]
 
-    syncOne ws
-      | wsId ws == stCurrent st = ws {wsStack = Stack.sync (mine ws <> unseen) (wsStack ws)}
-      | otherwise = ws {wsStack = Stack.sync (mine ws) (wsStack ws)}
+    -- Where a window nad has not got on a workspace belongs. A window it has
+    -- seen before goes back where it was: the rule only ever decides where a
+    -- window opens. A workspace that does not exist is ignored rather than
+    -- losing the window somewhere the user cannot switch to.
+    target w = case remembered w of
+      Just n | any ((== n) . wsId) (stWorkspaces st) -> n
+      _ -> stCurrent st
+
+    remembered w = case lookup w (stExiled st) of
+      Just n -> Just n
+      Nothing -> assign w
+
+    syncOne ws =
+      ws {wsStack = Stack.sync (mine ws <> arriving ws) (wsStack ws)}
+
+    arriving ws = filter ((== wsId ws) . target) unseen
 
     -- A workspace only ever keeps the live windows that already belong to it.
     mine ws = filter (`elem` stackItems (wsStack ws)) live

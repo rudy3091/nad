@@ -41,7 +41,15 @@ import Nad.Platform.Hotkey
   )
 import Nad.Platform.Screen (listScreens, mainScreenHeight)
 import Nad.Platform.Window (focusWindow, listWindows, requestTrust, setWindowFrame)
-import Nad.Types.Config (BarConfig (..), Config (..), bindings, reserveBar, shouldFloat)
+import Nad.Types.Config
+  ( BarConfig (..)
+  , Config (..)
+  , Rule
+  , bindings
+  , reserveBar
+  , ruleValue
+  , shouldFloat
+  )
 import Nad.Types.Geometry (Rect (..), rectRight)
 import Nad.Types.Window
 
@@ -164,11 +172,19 @@ worker cfg bars queue state = loop
       screens <- map (reserveBar (cfgBar cfg)) <$> listScreens
 
       let tileable0 = filter (not . shouldFloat (cfgFloats cfg)) windows
+          -- Rules match on app name and title, which only WindowInfo carries.
+          byRef rules ref =
+            find ((== ref) . winRef) tileable0 >>= ruleValue rules
       st0 <- readIORef state
-      let st1 = syncWindows (map winRef tileable0) st0
+      let st1 = syncWindows (byRef (cfgAssign cfg)) (map winRef tileable0) st0
+          -- Before anything else, because the layout pass at the end runs on
+          -- every event while the poll only comes once a second: a hotkey
+          -- pressed in between would otherwise re-tile over a drag nad had not
+          -- recorded yet, and put the window back for good.
+          dragged = adoptDrags (cfgPin cfg) screens tileable0 st1
           st2 = case event of
-            Refresh -> adoptDrags screens tileable0 st1
-            Perform action -> apply action st1
+            Refresh -> dragged
+            Perform action -> apply action dragged
       writeIORef state st2
 
       -- Moving between screens is the one action that has to touch a window
@@ -178,7 +194,7 @@ worker cfg bars queue state = loop
         Perform (MoveToScreen dir) -> sendToScreen screens tileable0 st2 dir
         _ -> pure tileable0
 
-      reconcile screens tileable st2
+      reconcile (cfgPin cfg) screens tileable st2
       when (event /= Refresh) (refocus tileable st2)
       paintBars (cfgBar cfg) bars tileable st2
 
@@ -211,9 +227,9 @@ barState clock screen windows st =
 --
 -- Windows of the current workspace are placed by the layout of the screen they
 -- sit on; windows of every other workspace are parked off screen.
-reconcile :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> IO ()
-reconcile screens windows st = do
-  forM_ (onScreens screens windows st) $ \(screen, here) -> do
+reconcile :: [(Rule, Int)] -> [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> IO ()
+reconcile pins screens windows st = do
+  forM_ (onScreens pins screens windows st) $ \(screen, here) -> do
     let sizing w = placeOf st (winRef w)
     forM_ (arrangeWith (currentLayout st) (screenUsable screen) sizing here) $ \(w, rect) ->
       void (setWindowFrame (winRef w) rect)
@@ -224,8 +240,12 @@ reconcile screens windows st = do
 -- | The current workspace's windows, in stack order, grouped by the screen they
 -- sit on. This is the split both the layout pass and drag adoption work from.
 onScreens
-  :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> [(ScreenInfo, [WindowInfo])]
-onScreens screens windows st =
+  :: [(Rule, Int)]
+  -> [ScreenInfo]
+  -> [WindowInfo]
+  -> WMState WindowRef
+  -> [(ScreenInfo, [WindowInfo])]
+onScreens pins screens windows st =
   [ (screen, [w | w <- visible, assignedTo w == Just (screenIndex screen)])
   | screen <- screens
   ]
@@ -234,18 +254,26 @@ onScreens screens windows st =
     -- Follow the stack's order, not the order macOS happened to report.
     visible = [w | ref <- order, Just w <- [find ((== ref) . winRef) windows]]
 
+    -- A pinned window belongs to its display whatever its coordinates say, and
+    -- the layout pass below moves it there. That also means MoveToScreen cannot
+    -- take it anywhere else: the next poll pulls it back, which is the point.
+    -- A pin naming an unplugged display falls through to the position.
+    --
     -- A window returning from another workspace is still parked off screen, so
     -- it belongs to no display. Give it the first one rather than dropping it.
-    assignedTo w = case screenFor screens (winFrame w) of
-      Just s -> Just (screenIndex s)
-      Nothing -> screenIndex <$> listToMaybe screens
+    assignedTo w = case ruleValue pins w of
+      Just i | i `elem` map screenIndex screens -> Just i
+      _ -> case screenFor screens (winFrame w) of
+        Just s -> Just (screenIndex s)
+        Nothing -> screenIndex <$> listToMaybe screens
 
 -- | Let the mouse resize a window in the Stacking layout: instead of putting it
 -- back where the layout wanted it on the next poll, keep the frame the user
 -- dragged it to. Its origin comes along, or grabbing the top-right corner would
 -- pull the window up and to the left while the pointer is still on it.
-adoptDrags :: [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> WMState WindowRef
-adoptDrags screens windows st = foldl' adopt st drags
+adoptDrags
+  :: [(Rule, Int)] -> [ScreenInfo] -> [WindowInfo] -> WMState WindowRef -> WMState WindowRef
+adoptDrags pins screens windows st = foldl' adopt st drags
   where
     adopt s (w, placement) = place (winRef w) placement s
 
@@ -255,7 +283,7 @@ adoptDrags screens windows st = foldl' adopt st drags
     drags =
       concat
         [ draggedPlacements spec area (Just . winFrame) (arrangeWith spec area sizing here)
-        | (screen, here) <- onScreens screens windows st
+        | (screen, here) <- onScreens pins screens windows st
         , let area = screenUsable screen
         ]
 

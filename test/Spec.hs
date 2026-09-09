@@ -3,7 +3,10 @@
 module Main (main) where
 
 import Control.Monad (unless)
+import Foreign.ForeignPtr (newForeignPtr_)
+import Foreign.Ptr (nullPtr)
 import System.Exit (exitFailure)
+import System.IO.Unsafe (unsafePerformIO)
 
 import Nad.Bar.Segment
 import Nad.Cli (Command (..), parseCommand)
@@ -13,9 +16,17 @@ import Nad.Core.Stack (Stack (..))
 import qualified Nad.Core.Stack as Stack
 import Nad.Core.State
 import Nad.Types.Geometry
-import Nad.Types.Config (BarConfig (..), BarPosition (..), defaultBar, reserveBar)
+import Nad.Types.Config
+  ( BarConfig (..)
+  , BarPosition (..)
+  , Rule (..)
+  , defaultBar
+  , matches
+  , reserveBar
+  , ruleValue
+  )
 import Nad.Types.Key
-import Nad.Types.Window (ScreenInfo (..), screenFor)
+import Nad.Types.Window (ScreenInfo (..), WindowInfo (..), WindowRef (..), screenFor)
 
 main :: IO ()
 main = do
@@ -75,6 +86,23 @@ narrower r = r {rectW = rectW r - 720}
 -- top edge both move.
 cornerwards :: Rect -> Rect
 cornerwards r = Rect (rectX r) (rectY r + 450) (rectW r - 720) (rectH r - 450)
+
+-- | A window to match rules against. A null handle stands in for the AX
+-- element no pure test can make: rules only read the app name and the title,
+-- and 'winRef' is a strict newtype field, so it has to be something real.
+kitty :: WindowInfo
+kitty =
+  WindowInfo
+    { winRef = WindowRef (unsafePerformIO (newForeignPtr_ nullPtr))
+    , winApp = "kitty"
+    , winTitle = "nad — man page"
+    , winPid = 1
+    , winFrame = screen
+    }
+
+-- | An assignment rule that names one window and nothing else.
+assignOnly :: Int -> Int -> Int -> Maybe Int
+assignOnly target ws w = if w == target then Just ws else Nothing
 
 pairs :: [a] -> [(a, a)]
 pairs xs = [(a, b) | (i, a) <- indexed, (j, b) <- indexed, i < (j :: Int)]
@@ -142,11 +170,24 @@ checks =
   , ("viewing an unknown workspace is ignored", stCurrent (apply (View 99) loaded) == 1)
   , ("moving a window to another workspace removes it here", stackItems (currentStack (apply (MoveToWorkspace 2) loaded)) == [2, 3])
   , ("...and adds it there", workspaceOf 1 (apply (MoveToWorkspace 2) loaded) == Just 2)
-  , ("sync leaves other workspaces alone", workspaceOf 1 (syncWindows [1, 2, 3] (apply (MoveToWorkspace 2) loaded)) == Just 2)
+  , ("sync leaves other workspaces alone", workspaceOf 1 (syncWindows (const Nothing) [1, 2, 3] (apply (MoveToWorkspace 2) loaded)) == Just 2)
+  , ("an unassigned new window joins the current workspace", workspaceOf 9 (syncWindows (const Nothing) [1, 2, 3, 9] loaded) == Just 1)
+  , -- assignment rules
+    ("a rule matches an app name exactly", matches (RuleApp "kitty") kitty && not (matches (RuleApp "kitt") kitty))
+  , ("a rule matches a title by substring", matches (RuleTitle "man") kitty)
+  , ("the first matching rule wins", ruleValue [(RuleApp "kitty", 1), (RuleTitle "man", 2)] kitty == Just 1)
+  , ("an unmatched window has no rule value", ruleValue [(RuleApp "Safari", 2)] kitty == Nothing)
+  , ("an assigned new window skips the current workspace", workspaceOf 9 (syncWindows (assignOnly 9 2) [1, 2, 3, 9] loaded) == Just 2)
+  , ("an assignment to a workspace that does not exist is ignored", workspaceOf 9 (syncWindows (assignOnly 9 99) [1, 2, 3, 9] loaded) == Just 1)
+  , ("a rule never moves a window nad already knows", workspaceOf 1 (syncWindows (assignOnly 1 2) [1, 2, 3] loaded) == Just 1)
+  , -- Sleep: macOS answers no windows at all, then all of them again.
+    ("a window that vanishes and comes back keeps its workspace", workspaceOf 1 woken == Just 2)
+  , ("...and is not remembered a second time", null (stExiled woken))
+  , ("a rule does not re-assign a window that came back", workspaceOf 1 (syncWindows (assignOnly 1 1) [1, 2, 3] asleep) == Just 2)
   , ("resizing a window records a size for it", placeSize (placeOf (apply (ResizeWindow (-0.1) 0) loaded) 1) == Just (0.9, 1))
   , ("window resizing is clamped", placeSize (placeOf (times 30 (apply (ResizeWindow (-0.05) 0)) loaded) 1) == Just (0.2, 1))
   , ("sizes accumulate on the focused window only", placeSize (placeOf (apply (ResizeWindow 0 (-0.1)) loaded) 2) == Nothing)
-  , ("a closed window's size is forgotten", placeSize (placeOf (syncWindows [2, 3] (apply (ResizeWindow (-0.1) 0) loaded)) 1) == Nothing)
+  , ("a closed window's size is forgotten", placeSize (placeOf (syncWindows (const Nothing) [2, 3] (apply (ResizeWindow (-0.1) 0) loaded)) 1) == Nothing)
   , ("a keyboard resize leaves the origin to the layout", placeOrigin (placeOf (apply (ResizeWindow (-0.1) 0) loaded) 1) == Nothing)
   , ("resizing master is clamped", specMasterRatio (currentLayout (times 20 (apply (ResizeMaster 0.05)) loaded)) <= 0.9)
   , ("master count never drops below one", specMasterCount (currentLayout (times 5 (apply (IncMaster (-1))) loaded)) == 1)
@@ -172,6 +213,10 @@ checks =
   , ("a top bar takes height off the top", screenUsable (reserveBar defaultBar oneScreen) == Rect 0 26 1440 874)
   , ("a disabled bar takes nothing", screenUsable (reserveBar defaultBar {barEnabled = False} oneScreen) == screen)
   , ("a bottom bar leaves the top alone", rectY (screenUsable (reserveBar defaultBar {barPosition = Bottom} oneScreen)) == 0)
+  , -- The bar is drawn over the menu bar, so the strip it needs is measured from
+    -- the top of the display, not from where macOS left off.
+    ("a bar shorter than the menu bar costs no space", screenUsable (reserveBar defaultBar notched) == screenUsable notched)
+  , ("a bar taller than the menu bar takes only the difference", screenUsable (reserveBar defaultBar {barHeight = 50} notched) == Rect 0 50 1440 826)
   , -- cli
     ("query windows parses", parseCommand ["query", "windows"] == QueryWindows)
   , ("no arguments runs the daemon", parseCommand [] == Daemon)
@@ -183,6 +228,9 @@ checks =
     stackedWidths sizing =
       map (rectW . snd) (arrangeWith (LayoutSpec Stacking 0.5 1 0) screen sizing [1 .. 3 :: Int])
     oneScreen = ScreenInfo 0 screen screen
+    -- A MacBook: the notch strip is inside the frame, and the menu bar living
+    -- in it is already out of the usable area.
+    notched = ScreenInfo 0 screen (Rect 0 38 1440 (900 - 38 - 24))
     Just space = parseCombo "cmd-alt-space"
     Just dee = parseCombo "cmd-alt-d"
     sampleBar = BarState [(1, True, 2), (2, False, 0)] "Tall" "editor" 0 "14:32"
@@ -190,6 +238,10 @@ checks =
       (chunk, []) -> [chunk]
       (chunk, _ : rest) -> chunk : splitOn sep rest
     loaded = (initialState 9 defaultLayouts) {stWorkspaces = [Workspace 1 three, Workspace 2 Stack.empty]}
+    -- Window 1 sent to workspace 2, then a poll that saw nothing at all, as
+    -- happens while the machine is asleep.
+    asleep = syncWindows (const Nothing) [] (apply (MoveToWorkspace 2) loaded)
+    woken = syncWindows (const Nothing) [1, 2, 3] asleep
     times n f = foldr (.) id (replicate n f)
     nubRects = foldr (\r acc -> if r `elem` acc then acc else r : acc) []
     twoScreens =

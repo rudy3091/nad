@@ -12,7 +12,8 @@ APIs, no SIP changes.
 - Keyboard focus, window swapping, master ratio and master count
 - Nine workspaces, independent of macOS Spaces
 - Multi-monitor: each display tiles on its own
-- Floating rules for apps that must be left alone
+- Rules: which workspace an app opens on, which display it stays on, and which
+  apps to leave alone entirely
 - A configurable status bar drawn as a borderless window per display
 - A control socket, so the same actions are available from the shell
 
@@ -161,7 +162,9 @@ main =
   nadWith
     defaultConfig
       { cfgWorkspaces = 5
-      , cfgFloats = FloatApp "Activity Monitor" : cfgFloats defaultConfig
+      , cfgFloats = RuleApp "Activity Monitor" : cfgFloats defaultConfig
+      , cfgAssign = [(RuleApp "kitty", 1), (RuleApp "Safari", 2)]
+      , cfgPin = [(RuleApp "kitty", 0)]
       , cfgBar =
           defaultBar
             { barPosition = Bottom
@@ -183,4 +186,44 @@ The library has to be visible to GHC for this. Once:
 
 ```sh
 cabal install --lib nad
+```
+
+### Rules
+
+Three settings take rules, and all of them match the same way: `RuleApp` on the
+application name, exactly, and `RuleTitle` on the window title, as a substring.
+The first rule that matches a window wins.
+
+| Setting     | What it decides                  | Shape           |
+| ----------- | -------------------------------- | --------------- |
+| `cfgFloats` | apps to leave where they are     | `[Rule]`        |
+| `cfgAssign` | the workspace a window opens on  | `[(Rule, Int)]` |
+| `cfgPin`    | the display a window is kept on  | `[(Rule, Int)]` |
+
+`cfgAssign` applies the first time nad sees a window and never again, so moving
+one with `cmd-alt-shift-N` afterwards sticks. It names a workspace, `1` to
+`cfgWorkspaces`; a number outside that range is ignored.
+
+`cfgPin` names a display index, the same one `nad query screens` prints, where
+`0` is the display with the menu bar. It holds: a pinned window goes back on the
+next poll, so `cmd-alt-shift-right` cannot take it elsewhere. A rule naming a
+display that is not attached is ignored, so unplugging a monitor leaves the
+window where it is rather than losing it.
+
+### Writing the config with Claude Code
+
+`.claude/skills/nad-config/` is a skill that knows the whole configuration
+surface — the fields, the key names, the actions — and verifies what it writes
+with `nad --recompile`. Claude Code picks it up inside this repository; to have
+it anywhere:
+
+```sh
+ln -s "$PWD/.claude/skills/nad-config" ~/.claude/skills/nad-config
+```
+
+Its `example.hs` is a config using every setting once, and doubles as the check
+that the skill has not drifted from the library:
+
+```sh
+cabal exec -- ghc -fno-code .claude/skills/nad-config/example.hs
 ```

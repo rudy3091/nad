@@ -79,9 +79,15 @@ int nad_bar_create(double x, double y, double width, double height, const char *
     window.backgroundColor = parse_color(bg, [NSColor blackColor]);
     window.opaque = NO;
     window.hasShadow = NO;
-    // Above ordinary windows, and present on every Space so the bar does not
-    // vanish when the user switches with macOS's own gesture.
-    window.level = NSStatusWindowLevel;
+    // Above the menu bar, not merely above ordinary windows: a top bar is drawn
+    // over it, and NSStatusWindowLevel is not reliably enough to win that.
+    // Present on every Space too, so the bar does not vanish when the user
+    // switches with macOS's own gesture.
+    //
+    // ponytail: screen-saver level, so the bar also floats over full-screen
+    // apps. The lock screen is at CGShieldingWindowLevel, well above this, so it
+    // still covers the bar.
+    window.level = NSScreenSaverWindowLevel;
     window.collectionBehavior =
         NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary;
     // The bar is a readout, not a control: clicks belong to whatever is under it.

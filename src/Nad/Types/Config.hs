@@ -2,32 +2,35 @@
 -- not the state of the screen lives in here.
 module Nad.Types.Config
   ( Config (..)
-  , FloatRule (..)
+  , Rule (..)
   , BarConfig (..)
   , BarPosition (..)
   , defaultConfig
   , defaultBar
+  , matches
+  , ruleValue
   , shouldFloat
   , bindings
   , reserveBar
   ) where
 
 import Data.List (isInfixOf)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 
 import Nad.Bar.Segment (BarContent, BarState, defaultRender)
 import Nad.Core.Action (Action (..), Direction (..))
 import Nad.Core.Layout (LayoutSpec, defaultLayouts)
-import Nad.Types.Geometry (Rect (..))
+import Nad.Types.Geometry (Rect (..), rectBottom)
 import Nad.Types.Key (KeyCombo, parseCombo)
 import Nad.Types.Window (ScreenInfo (..), WindowInfo (..))
 
--- | A window matching a rule is left exactly where its app put it.
-data FloatRule
+-- | How a rule picks the windows it applies to. Floating, workspace assignment
+-- and display pinning all match the same way.
+data Rule
   = -- | Application name, matched exactly.
-    FloatApp String
+    RuleApp String
   | -- | Window title, matched as a substring.
-    FloatTitle String
+    RuleTitle String
   deriving (Eq, Show)
 
 data BarPosition = Top | Bottom
@@ -70,7 +73,12 @@ reserveBar cfg screen
   where
     h = barHeight cfg
     shrink r = case barPosition cfg of
-      Top -> r {rectY = rectY r + h, rectH = max 0 (rectH r - h)}
+      -- A top bar is drawn at the top of the display, over the menu bar, so
+      -- only the part of it reaching past the menu bar has to be taken away.
+      -- A bar shorter than the menu bar costs nothing at all.
+      Top ->
+        let top = max (rectY r) (rectY (screenFrame screen) + h)
+         in r {rectY = top, rectH = max 0 (rectBottom r - top)}
       Bottom -> r {rectH = max 0 (rectH r - h)}
 
 data Config = Config
@@ -78,7 +86,15 @@ data Config = Config
   -- ^ Bindings as @(\"cmd-alt-j\", action)@. Unparseable names are reported at
   -- start-up rather than silently ignored — see 'bindings'.
   , cfgLayouts :: [LayoutSpec]
-  , cfgFloats :: [FloatRule]
+  , cfgFloats :: [Rule]
+  -- ^ Windows left exactly where their app put them.
+  , cfgAssign :: [(Rule, Int)]
+  -- ^ The workspace a window opens on, as @(rule, workspace)@. Applies the
+  -- first time nad sees a window and never again, so moving one by hand sticks.
+  , cfgPin :: [(Rule, Int)]
+  -- ^ The display a window is kept on, as @(rule, screen index)@. Index 0 is
+  -- the display holding the menu bar. A rule naming a display that is not
+  -- attached is ignored.
   , cfgWorkspaces :: Int
   , cfgBar :: BarConfig
   }
@@ -89,6 +105,8 @@ defaultConfig =
     { cfgKeys = defaultKeys
     , cfgLayouts = defaultLayouts
     , cfgFloats = defaultFloats
+    , cfgAssign = []
+    , cfgPin = []
     , cfgWorkspaces = 9
     , cfgBar = defaultBar
     }
@@ -125,19 +143,25 @@ defaultKeys =
 
 -- | Apps whose windows are dialogs pretending to be windows, or which macOS
 -- refuses to resize anyway.
-defaultFloats :: [FloatRule]
+defaultFloats :: [Rule]
 defaultFloats =
-  [ FloatApp "System Settings"
-  , FloatApp "Calculator"
-  , FloatApp "Finder" -- copy dialogs
-  , FloatTitle "Preferences"
+  [ RuleApp "System Settings"
+  , RuleApp "Calculator"
+  , RuleApp "Finder" -- copy dialogs
+  , RuleTitle "Preferences"
   ]
 
-shouldFloat :: [FloatRule] -> WindowInfo -> Bool
-shouldFloat rules w = any match rules
-  where
-    match (FloatApp name) = winApp w == name
-    match (FloatTitle needle) = needle `isInfixOf` winTitle w
+matches :: Rule -> WindowInfo -> Bool
+matches (RuleApp name) w = winApp w == name
+matches (RuleTitle needle) w = needle `isInfixOf` winTitle w
+
+shouldFloat :: [Rule] -> WindowInfo -> Bool
+shouldFloat rules w = any (`matches` w) rules
+
+-- | What a table of rules says about a window. The first match wins, so order
+-- is priority.
+ruleValue :: [(Rule, Int)] -> WindowInfo -> Maybe Int
+ruleValue rules w = listToMaybe [n | (rule, n) <- rules, matches rule w]
 
 -- | The bindings that parsed. Anything that did not is returned separately so
 -- the caller can complain about it instead of leaving the user with a key that

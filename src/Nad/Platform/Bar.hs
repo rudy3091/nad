@@ -36,10 +36,8 @@ createBars :: BarConfig -> Double -> [ScreenInfo] -> IO [Bar]
 createBars cfg mainHeight screens = mapMaybe id <$> mapM create screens
   where
     create screen = do
-      -- Placed against the usable area, not the whole display, so the bar sits
-      -- below the menu bar rather than under it. Callers pass screens from
-      -- before 'reserveBar' has taken this strip away.
-      let rect = barRect cfg mainHeight (screenUsable screen)
+      -- Callers pass screens from before 'reserveBar' has taken this strip away.
+      let rect = barRect cfg mainHeight screen
       handle <-
         withCString (barBackground cfg) $ \bg ->
           withCString (barForeground cfg) $ \fg ->
@@ -69,15 +67,22 @@ destroyBars :: IO ()
 destroyBars = c_bar_destroy_all
 
 -- | The bar's own frame, in Cocoa coordinates, spanning the width of a screen.
-barRect :: BarConfig -> Double -> Rect -> Rect
+--
+-- A top bar goes at the very top of the display and is drawn over the menu bar,
+-- which is also what puts it level with the notch strip on a MacBook rather
+-- than the notch's height below it. A bottom bar stays inside the usable area,
+-- so it sits above the Dock instead of under it.
+barRect :: BarConfig -> Double -> ScreenInfo -> Rect
 barRect cfg mainHeight screen =
   Rect
-    { rectX = rectX screen
+    { rectX = rectX area
     , rectY = axToCocoaY mainHeight (barHeight cfg) axY
-    , rectW = rectW screen
+    , rectW = rectW area
     , rectH = barHeight cfg
     }
   where
-    axY = case barPosition cfg of
-      Top -> rectY screen
-      Bottom -> rectY screen + rectH screen - barHeight cfg
+    (area, axY) = case barPosition cfg of
+      Top -> (screenFrame screen, rectY (screenFrame screen))
+      Bottom ->
+        let u = screenUsable screen
+         in (u, rectY u + rectH u - barHeight cfg)

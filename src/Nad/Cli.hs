@@ -17,7 +17,7 @@ import Nad.Config.Recompile (launchUserConfig, recompile)
 import Nad.Paths (compiledPath, configPath, socketPath)
 import Nad.Ipc (sendCommand)
 import Nad.Runtime (runDaemon)
-import Nad.Types.Config (Config (..), bindings, reserveBar, shouldFloat)
+import Nad.Types.Config (Config (..), bindings, reserveBar, ruleValue, shouldFloat)
 import Nad.Platform.Hotkey (runEventLoop, secureInputHolder, startHotkeys)
 import Nad.Types.Key (KeyCode (..), KeyCombo (..), Modifier (..), showCombo)
 import Nad.Core.Action (showAction)
@@ -154,8 +154,12 @@ tileOnce cfg = case cfgLayouts cfg of
     screens <- map (reserveBar (cfgBar cfg)) <$> listScreens
     windows <- filter (not . shouldFloat (cfgFloats cfg)) <$> listWindows
     forM_ screens $ \screen -> do
-      let onThisScreen w =
-            fmap screenIndex (screenFor screens (winFrame w)) == Just (screenIndex screen)
+      -- A pin decides the display; otherwise the window's position does. Same
+      -- rule the daemon uses, or `nad tile` would put a window somewhere the
+      -- daemon immediately moves it away from.
+      let onThisScreen w = case ruleValue (cfgPin cfg) w of
+            Just i | i `elem` map screenIndex screens -> i == screenIndex screen
+            _ -> fmap screenIndex (screenFor screens (winFrame w)) == Just (screenIndex screen)
       forM_ (arrange spec (screenUsable screen) (filter onThisScreen windows)) $
         \(w, rect) -> setWindowFrame (winRef w) rect
 
