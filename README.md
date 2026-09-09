@@ -61,6 +61,7 @@ NAD_SIGN_IDENTITY=nad-dev scripts/bundle.sh
 
 ```sh
 nad                     # run it
+nad restart             # stop the running one and take its place
 nad query keys          # the active bindings
 nad query windows       # what nad can tile
 nad query screens       # displays and their usable areas
@@ -217,10 +218,33 @@ main =
 process keeps its permissions. `nad --recompile` rebuilds it; a config that
 fails to compile is reported and the previous binary keeps running.
 
+`nad restart` picks up an edited config: it asks the running nad to quit through
+the control socket — so the system shortcuts it took over are handed back —
+waits for it to go, then starts in its place.
+
+```sh
+nad restart               # after editing ~/.nad/nad.hs
+nad --recompile && nad restart   # after rebuilding the library itself
+```
+
+The second form matters because `nad` only rebuilds the config when `nad.hs` is
+newer than its binary. Reinstalling the library does not touch `nad.hs`, so
+without `--recompile` a restart re-runs the same stale binary and nothing
+appears to change.
+
 The library has to be visible to GHC for this. Once:
 
 ```sh
-cabal install --lib nad
+cabal install --lib lib:nad
+```
+
+Repeating that after a source change registers another copy of `nad` in the
+cabal store, and once two are registered `import Nad` fails with `Ambiguous
+module name`. Drop the superseded ones:
+
+```sh
+DB=~/.local/state/cabal/store/ghc-*/package.db
+ghc-pkg unregister --package-db=$DB --force --unit-id nad-0.1.0.0-<old-hash>
 ```
 
 ### Rules

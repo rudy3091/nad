@@ -26,7 +26,8 @@ nad's config is a Haskell program at `~/.nad/nad.hs`, like xmonad's. It imports
    the GHC error, fix it, and run it again until it prints `nad: built ...`.
 4. **Check the result** with `nad query keys` (bindings that parsed, and any
    that did not) or `nad query state` (a running nad's workspaces).
-5. A binding change reaches a running nad only after a restart. Say so.
+5. A binding change reaches a running nad only after `nad restart`. Say so, or
+   run it.
 
 If `nad --recompile` fails with `Could not find module 'Nad'`, the library is
 not visible to GHC. That is a one-time setup step in the nad checkout:
@@ -255,8 +256,10 @@ is the only thing saying which display the keyboard is on. Floating windows
 - **`colored` takes the colour first, the text second.** Both are `String`, so
   swapping them compiles and produces nonsense on screen.
 - Do not `import Nad.Types.Key`. Keys are configured as plain strings.
-- `nad --recompile` always rebuilds. Plain `nad` only rebuilds when `nad.hs` is
-  newer than its binary.
+- `nad --recompile` always rebuilds. Plain `nad` and `nad restart` only rebuild
+  when `nad.hs` is newer than its binary — so after the nad *library* is
+  reinstalled, a bare restart re-runs the same stale binary and the change
+  appears not to have taken. Use `nad --recompile && nad restart` there.
 - A config that forgets to call `nadWith` (or `nad`) does nothing at all — nad
   execs it and it exits.
 - If bindings do nothing in one app only, that is secure keyboard entry, not

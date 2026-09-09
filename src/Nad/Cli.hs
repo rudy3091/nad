@@ -7,6 +7,7 @@ module Nad.Cli
   , usage
   ) where
 
+import Control.Concurrent (threadDelay)
 import Control.Monad (forM_, unless)
 import System.Directory (doesFileExist)
 import System.Exit (exitFailure)
@@ -27,6 +28,7 @@ import Nad.Types.Window
 
 data Command
   = Daemon
+  | Restart
   | QueryWindows
   | QueryScreens
   | QueryKeys
@@ -47,6 +49,7 @@ parseCommand args = case args of
   ["query", "keys"] -> QueryKeys
   ["query", "state"] -> QueryState
   ("msg" : rest) | not (null rest) -> Message rest
+  ["restart"] -> Restart
   ["tile"] -> Tile
   ["doctor"] -> Doctor
   ["--recompile"] -> Recompile
@@ -60,6 +63,7 @@ runCommand :: Config -> Command -> IO ()
 runCommand cfg cmd = case cmd of
   -- A user config replaces this process entirely; if there is none, carry on.
   Daemon -> launchUserConfig >> runDaemon cfg
+  Restart -> stopRunning >> runCommand cfg Daemon
   Recompile -> recompileOnly
   WatchKeys -> watchKeys
   QueryKeys -> mapM_ putStrLn (describeKeys cfg)
@@ -82,6 +86,7 @@ usage =
     , ""
     , "usage:"
     , "  nad                  run the window manager"
+    , "  nad restart          stop a running nad and take its place"
     , "  nad msg <action>     tell a running nad to do something"
     , "  nad query keys       list the active key bindings"
     , "  nad query state      ask a running nad what it is showing"
@@ -117,6 +122,36 @@ watchKeys = do
   reportSecureInput
   putStrLn "watching keys. cmd-alt combinations are swallowed; ctrl-c to stop."
   runEventLoop
+
+-- | Ask a running daemon to quit, and wait until it has.
+--
+-- Through the control socket rather than a signal, so the daemon takes its own
+-- exit path and hands back the system shortcuts it switched off. Returns
+-- straight away when nothing is listening, which makes @nad restart@ work as a
+-- plain start too.
+--
+-- The old process holds the event tap and the socket until it is really gone,
+-- so starting the new one before then would leave it without either.
+stopRunning :: IO ()
+stopRunning = do
+  path <- socketPath
+  running <- sendCommand path ["quit"]
+  case running of
+    Left _ -> pure ()
+    Right _ -> waitFor path restartTimeout
+  where
+    -- A daemon does not delete its socket file on the way out, so the only way
+    -- to ask whether it has gone is to try to talk to it.
+    waitFor path n
+      | n <= 0 =
+          hPutStrLn stderr "nad: the running nad has not exited; starting anyway."
+      | otherwise = do
+          threadDelay pollDelay
+          alive <- sendCommand path ["state"]
+          either (const (pure ())) (const (waitFor path (n - 1))) alive
+
+    pollDelay = 100000
+    restartTimeout = 50 :: Int -- 5 seconds
 
 recompileOnly :: IO ()
 recompileOnly = do

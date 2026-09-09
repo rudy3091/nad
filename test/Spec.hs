@@ -245,6 +245,7 @@ checks =
   , -- cli
     ("query windows parses", parseCommand ["query", "windows"] == QueryWindows)
   , ("no arguments runs the daemon", parseCommand [] == Daemon)
+  , ("restart parses", parseCommand ["restart"] == Restart)
   , ("garbage is rejected", parseCommand ["wat"] == Unknown ["wat"])
   ]
   where
