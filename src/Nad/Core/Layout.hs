@@ -44,7 +44,9 @@ data LayoutSpec = LayoutSpec
 defaultLayouts :: [LayoutSpec]
 defaultLayouts =
   [ LayoutSpec Tall 0.55 1 8
-  , LayoutSpec Full 0.55 1 0
+  , -- The border is drawn just outside the window, so a gapless Full would push
+    -- it off the screen edge. Same gap as the other layouts.
+    LayoutSpec Full 0.55 1 8
   , LayoutSpec Stacking 0.55 1 8
   ]
 

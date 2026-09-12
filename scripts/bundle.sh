@@ -50,6 +50,29 @@ PLIST
 
 codesign --force --deep --sign "$IDENTITY" "$APP"
 
+# The bundle is only the executable. ~/.nad/nad.hs imports the *library*, so
+# without reinstalling it a source change never reaches the config binary —
+# `nad restart` just re-runs the same stale one and nothing appears to change.
+cabal install --lib lib:nad --force-reinstalls
+
+# Each reinstall registers another copy, and two make `import Nad` ambiguous.
+# The environment file names the one to keep, and the db holding it.
+ENV=$(ls -d "$HOME"/.ghc/*-"$(ghc --numeric-version)"/environments/default)
+DB=$(awk '$1 == "package-db" { print $2 }' "$ENV")
+KEEP=$(awk '$1 == "package-id" { printf "%s ", $2 }' "$ENV")
+for id in $(ghc-pkg field --package-db="$DB" nad id --simple-output); do
+  case " $KEEP " in
+    *" $id "*) continue ;;
+  esac
+  ghc-pkg unregister --package-db="$DB" --force --unit-id "$id"
+done
+
+# Rebuild the user's config against what was just installed. Unconditional:
+# nad skips the rebuild when nad.hs is older than its binary, which it is.
+if [ -f "$HOME/.nad/nad.hs" ]; then
+  "$APP/Contents/MacOS/nad" --recompile
+fi
+
 echo "built $APP (identity: $IDENTITY)"
 echo "run: $APP/Contents/MacOS/nad doctor"
 if [ "$IDENTITY" = "-" ]; then

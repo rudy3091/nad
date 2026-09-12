@@ -255,7 +255,9 @@ nad --recompile && nad restart   # after reinstalling the library
 reinstalling the library does not touch `nad.hs` — so without `--recompile` the
 restart re-runs the same stale binary and nothing appears to change.
 
-The library has to be visible to GHC for this. Once:
+`scripts/bundle.sh` does all of this — reinstall, prune, `--recompile` — so
+after it only `nad restart` is left. By hand, the library has to be visible to
+GHC. Once:
 
 ```sh
 cabal install --lib lib:nad

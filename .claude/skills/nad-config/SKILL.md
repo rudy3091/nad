@@ -128,7 +128,7 @@ data LayoutSpec = LayoutSpec
 
 defaultLayouts =
   [ LayoutSpec Tall     0.55 1 8
-  , LayoutSpec Full     0.55 1 0
+  , LayoutSpec Full     0.55 1 8
   , LayoutSpec Stacking 0.55 1 8
   ]
 ```
