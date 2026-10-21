@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* While a "Vertical iPad" display (vertical-ipad-screenshare) is present, the
+  Sidecar display is no longer tiled: it only carries the rotated picture and
+  sits under a fullscreen mirror window.
 * Multi-monitor rework. Every display now shows a workspace of its own, as in
   xmonad, instead of all of them switching together. A window's display follows
   from its workspace rather than from its coordinates, which fixes windows piling
